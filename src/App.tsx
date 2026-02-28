@@ -2,125 +2,43 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import DOMPurify from "dompurify";
-import { marked } from "marked";
 import gotifyLogo from "./assets/gotify-logo.png";
-
-type ConnectionState = "Connected" | "Disconnected" | "Connecting" | "Backoff";
-
-type SettingsResponse = {
-  base_url: string;
-  has_token: boolean;
-  min_priority: number;
-  cache_limit: number;
-  launch_at_login: boolean;
-  start_minimized_to_tray: boolean;
-  pause_until: number | null;
-  pause_mode: string | null;
-  quiet_hours_start: number | null;
-  quiet_hours_end: number | null;
-};
-
-type PauseStateResponse = {
-  pause_until: number | null;
-  pause_mode: string | null;
-};
-
-type GotifyMessage = {
-  id: number;
-  app_id: number;
-  title: string;
-  message: string;
-  priority: number;
-  app: string;
-  app_icon: string | null;
-  date: string;
-};
-
-type UiMessage = GotifyMessage & {
-  rendered_html: string;
-  primary_url: string | null;
-  parsed_ts: number | null;
-  formatted_time: string;
-};
-
-type RuntimeDiagnostics = {
-  connection_state: ConnectionState;
-  should_run: boolean;
-  last_connected_at: number | null;
-  last_stream_event_at: number | null;
-  last_message_at: number | null;
-  last_message_id: number | null;
-  stale_for_seconds: number | null;
-  last_error: string | null;
-  backoff_seconds: number;
-  reconnect_attempts: number;
-};
-
-type AppGroup = {
-  key: string;
-  name: string;
-  count: number;
-  icon: string | null;
-};
-
-type UrlPreview = {
-  url: string;
-  title: string | null;
-  description: string | null;
-  site_name: string | null;
-  image: string | null;
-};
-
-type ThemePreference = "system" | "light" | "dark" | "dracula";
-type DrawerTab = "settings" | "diagnostics";
-type PauseMode = "15m" | "1h" | "custom" | "forever";
-type SelectionHistoryState = {
-  tag: "gotify-selection-v1";
-  app: string;
-  messageId: number | null;
-};
+import { DiagnosticsPanel } from "./components/DiagnosticsPanel";
+import { MessageFeed } from "./components/MessageFeed";
+import { SettingsForm } from "./components/SettingsForm";
+import type {
+  AppGroup,
+  ConnectionState,
+  DrawerTab,
+  GotifyMessage,
+  PauseMode,
+  PauseStateResponse,
+  RuntimeDiagnostics,
+  SelectionHistoryState,
+  SettingsResponse,
+  ThemePreference,
+  UiMessage,
+  UrlPreview,
+} from "./types";
+import { debugUi } from "./utils/debug";
+import { compareMessagesNewestFirst, mergeUiMessages, toUiMessage } from "./utils/messages";
+import { normalizePauseMode, normalizeSelectionMessageId, isSelectionHistoryState } from "./utils/selection";
+import { formatPauseDuration } from "./utils/time";
+import {
+  computeWindowRange,
+  WINDOW_DEFAULT_ROW_HEIGHT,
+  WINDOW_MAX_ROW_HEIGHT,
+  WINDOW_MIN_ROW_HEIGHT,
+  WINDOWING_THRESHOLD,
+} from "./utils/windowing";
 
 const THEME_STORAGE_KEY = "gotify-theme-preference";
-const ENABLE_MESSAGE_DEBUG = import.meta.env.DEV;
 const PAUSE_FOREVER_SENTINEL = 0;
-const WINDOWING_THRESHOLD = 100;
-const WINDOW_DEFAULT_ROW_HEIGHT = 260;
-const WINDOW_MIN_ROW_HEIGHT = 120;
-const WINDOW_MAX_ROW_HEIGHT = 520;
-const WINDOW_OVERSCAN = 8;
-
-function debugUi(event: string, payload: Record<string, unknown>): void {
-  if (!ENABLE_MESSAGE_DEBUG) return;
-  console.debug(`[gotify-ui] ${event}`, payload);
-}
 
 function loadThemePreference(): ThemePreference {
   if (typeof window === "undefined") return "system";
   const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
   return stored === "light" || stored === "dark" || stored === "system" || stored === "dracula" ? stored : "system";
-}
-
-function initials(name: string): string {
-  const parts = name
-    .split(/\s+/)
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .slice(0, 2);
-  if (parts.length === 0) return "?";
-  return parts.map((part) => part[0]?.toUpperCase() ?? "").join("");
-}
-
-function TrashIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M3 6h18" />
-      <path d="M8 6V4h8v2" />
-      <path d="M7 6l1 14h8l1-14" />
-      <path d="M10 10v7" />
-      <path d="M14 10v7" />
-    </svg>
-  );
 }
 
 function GearIcon() {
@@ -129,27 +47,6 @@ function GearIcon() {
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
-  );
-}
-
-function normalizeSelectionMessageId(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function normalizePauseMode(value: unknown): PauseMode | null {
-  if (value === "15m" || value === "1h" || value === "custom" || value === "forever") {
-    return value;
-  }
-  return null;
-}
-
-function isSelectionHistoryState(value: unknown): value is SelectionHistoryState {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<SelectionHistoryState>;
-  return (
-    candidate.tag === "gotify-selection-v1" &&
-    typeof candidate.app === "string" &&
-    (typeof candidate.messageId === "number" || candidate.messageId === null)
   );
 }
 
@@ -397,6 +294,17 @@ export function App() {
         const withoutExisting = current.filter((item) => item.id !== incoming.id);
         return [incoming, ...withoutExisting].slice(0, cacheLimitRef.current);
       });
+      setDiagnostics((current) => {
+        if (!current) return current;
+        const nowSec = Math.floor(Date.now() / 1000);
+        return {
+          ...current,
+          last_stream_event_at: nowSec,
+          last_message_at: nowSec,
+          last_message_id: event.payload.id,
+          stale_for_seconds: 0,
+        };
+      });
     }).then((fn) => {
       if (destroyed) { fn(); return; }
       unlistenMessage = fn;
@@ -593,8 +501,35 @@ export function App() {
     };
   }, [feedback]);
 
-  // Diagnostics are pushed by the backend via runtime-diagnostics events and are
-  // initialised in the startup load() call above. No polling loop needed.
+  // Keep diagnostics fresh while the diagnostics panel is open. Some macOS/WebKit
+  // focus/throttle states can delay event delivery, so this lightweight poll keeps
+  // counters (like stream idle) accurate in real time when the user is actively
+  // viewing diagnostics.
+  useEffect(() => {
+    if (drawerTab !== "diagnostics") return;
+    let disposed = false;
+
+    const refreshDiagnostics = async () => {
+      try {
+        const runtime = await invoke<RuntimeDiagnostics>("get_runtime_diagnostics");
+        if (disposed) return;
+        setDiagnostics(runtime);
+        setConnectionState(runtime.connection_state);
+      } catch {
+        // ignore transient invoke errors
+      }
+    };
+
+    void refreshDiagnostics();
+    const timer = window.setInterval(() => {
+      void refreshDiagnostics();
+    }, 1000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [drawerTab]);
 
   // macOS WebKit throttles JavaScript callbacks (including Tauri event listeners)
   // when a window is open but does not have keyboard focus. The message-received
@@ -904,6 +839,15 @@ export function App() {
   const bottomSpacerPx = isWindowed
     ? Math.max(0, filteredMessages.length - windowRange.end - 1) * estimatedRowHeightRef.current
     : 0;
+  const streamIdleSeconds = useMemo(() => {
+    if (diagnostics?.last_stream_event_at != null) {
+      return Math.max(0, clockSec - diagnostics.last_stream_event_at);
+    }
+    if (typeof diagnostics?.stale_for_seconds === "number" && Number.isFinite(diagnostics.stale_for_seconds)) {
+      return Math.max(0, Math.floor(diagnostics.stale_for_seconds));
+    }
+    return 0;
+  }, [clockSec, diagnostics]);
 
   useEffect(() => {
     if (!isWindowed) return;
@@ -1050,174 +994,26 @@ export function App() {
 
         {feedback ? <div className={feedback.kind === "ok" ? "feedback ok" : "feedback error"}>{feedback.message}</div> : null}
 
-        <section className="content-grid">
-          {!isQuickWindow ? (
-            <aside className="apps-panel">
-              <h2>Applications</h2>
-              <button
-                type="button"
-                className={selectedApp === "all" ? "app-chip selected" : "app-chip"}
-                onClick={() => applySelection("all", null, true)}
-              >
-                <span className="chip-left">All Messages</span>
-              </button>
-
-              {appGroups.map((group) => (
-                <button
-                  key={group.key}
-                  type="button"
-                  className={selectedApp === group.key ? "app-chip selected" : "app-chip"}
-                  onClick={() => applySelection(group.key, null, true)}
-                >
-                  <span className="chip-left">
-                    {group.icon ? (
-                      <img
-                        src={group.icon}
-                        alt=""
-                        className="app-icon"
-                        onError={(event) => {
-                          event.currentTarget.style.display = "none";
-                          const fallback = event.currentTarget.nextElementSibling as HTMLSpanElement | null;
-                          if (fallback) fallback.style.display = "inline-flex";
-                        }}
-                      />
-                    ) : null}
-                    <span className="app-icon-fallback" style={{ display: group.icon ? "none" : "inline-flex" }}>
-                      {initials(group.name)}
-                    </span>
-                    {group.name}
-                  </span>
-                  <span>{group.count}</span>
-                </button>
-              ))}
-            </aside>
-          ) : null}
-
-          <section className={isQuickWindow ? "feed-panel quick-feed-panel" : "feed-panel"}>
-            {!isQuickWindow ? (
-              <div className="feed-header">
-                <div>
-                  <h2>{selectedAppName}</h2>
-                </div>
-              </div>
-            ) : null}
-
-            {filteredMessages.length === 0 ? (
-              <p className="help">No messages cached yet.</p>
-            ) : (
-              <ul
-                ref={messageListRef}
-                className={isWindowed ? "message-list message-list-windowed" : "message-list"}
-                onScroll={
-                  isWindowed
-                    ? (event) => {
-                        const target = event.currentTarget;
-                        setWindowRange(
-                          computeWindowRange(
-                            filteredMessages.length,
-                            target.scrollTop,
-                            target.clientHeight,
-                            estimatedRowHeightRef.current
-                          )
-                        );
-                      }
-                    : undefined
-                }
-              >
-                {isWindowed && topSpacerPx > 0 ? (
-                  <li aria-hidden="true" className="message-spacer" style={{ height: `${topSpacerPx}px` }} />
-                ) : null}
-                {visibleMessages.map((message) => {
-                  const preview = message.primary_url ? urlPreviews[message.primary_url] : null;
-                  return (
-                    <li
-                      key={message.id}
-                      data-message-id={message.id}
-                      className={message.id === activeMessage?.id ? "message-item selected" : "message-item"}
-                      onClick={() => {
-                        if (isQuickWindow) {
-                          setSelectedMessageId(message.id);
-                          return;
-                        }
-                        const targetApp =
-                          selectedApp === "all"
-                            ? (message.app_id > 0 ? String(message.app_id) : "all")
-                            : selectedApp;
-                        applySelection(targetApp, message.id, true);
-                      }}
-                    >
-                      <div className="message-row-top">
-                        <div className="message-title-wrap">
-                          {isQuickWindow ? (
-                            <span className="quick-message-icon-wrap">
-                              {message.app_icon ? (
-                                <img
-                                  src={message.app_icon}
-                                  alt=""
-                                  className="quick-message-icon"
-                                  onError={(event) => {
-                                    event.currentTarget.style.display = "none";
-                                    const fallback = event.currentTarget.nextElementSibling as HTMLSpanElement | null;
-                                    if (fallback) fallback.style.display = "inline-flex";
-                                  }}
-                                />
-                              ) : null}
-                              <span
-                                className="quick-message-icon-fallback"
-                                style={{ display: message.app_icon ? "none" : "inline-flex" }}
-                              >
-                                {initials(message.app || "App")}
-                              </span>
-                            </span>
-                          ) : null}
-                          <strong className="message-title">{message.title || "(No title)"}</strong>
-                        </div>
-                        <span className="message-time">{message.formatted_time}</span>
-                      </div>
-                      <div className="message-row-meta">
-                        <span>{message.app || "Unknown app"}</span>
-                        <span className="priority-pill">P{message.priority}</span>
-                      </div>
-                      <div
-                        className="markdown-body list-message-body"
-                        dangerouslySetInnerHTML={{
-                          __html: message.rendered_html,
-                        }}
-                      />
-                      {preview ? (
-                        <a className="preview-card" href={preview.url} target="_blank" rel="noreferrer">
-                          {preview.image ? <img src={preview.image} alt="" className="preview-image" /> : null}
-                          <div className="preview-content">
-                            <div className="preview-site">{preview.site_name || new URL(preview.url).host}</div>
-                            <div className="preview-title">{preview.title || preview.url}</div>
-                            {preview.description ? <div className="preview-desc">{preview.description}</div> : null}
-                          </div>
-                        </a>
-                      ) : null}
-                      <div className="message-row-actions">
-                        <button
-                          type="button"
-                          className="danger-button subtle icon-button"
-                          aria-label="Delete message"
-                          title="Delete message"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void onDeleteMessage(message.id);
-                          }}
-                        >
-                          <TrashIcon className={deletingMessageIds[message.id] ? "trash-icon spinning" : "trash-icon"} />
-                        </button>
-                      </div>
-                    </li>
-                  );
-                })}
-                {isWindowed && bottomSpacerPx > 0 ? (
-                  <li aria-hidden="true" className="message-spacer" style={{ height: `${bottomSpacerPx}px` }} />
-                ) : null}
-              </ul>
-            )}
-          </section>
-        </section>
+        <MessageFeed
+          isQuickWindow={isQuickWindow}
+          selectedApp={selectedApp}
+          selectedAppName={selectedAppName}
+          appGroups={appGroups}
+          filteredMessages={filteredMessages}
+          visibleMessages={visibleMessages}
+          activeMessage={activeMessage}
+          isWindowed={isWindowed}
+          topSpacerPx={topSpacerPx}
+          bottomSpacerPx={bottomSpacerPx}
+          estimatedRowHeightRef={estimatedRowHeightRef}
+          messageListRef={messageListRef}
+          deletingMessageIds={deletingMessageIds}
+          urlPreviews={urlPreviews}
+          applySelection={applySelection}
+          setSelectedMessageId={setSelectedMessageId}
+          setWindowRange={setWindowRange}
+          onDeleteMessage={onDeleteMessage}
+        />
         {!isQuickWindow ? (
           <>
             <button
@@ -1252,212 +1048,47 @@ export function App() {
 
           <div className="drawer-body">
             {drawerTab === "settings" ? (
-              <form className="settings-form" onSubmit={onSave}>
-
-                <div className="settings-group">
-                  <p className="settings-group-title">Connection</p>
-                  <div className="settings-card">
-                    <label className="settings-field">
-                      <span className="settings-label">Server URL</span>
-                      <input
-                        type="url"
-                        value={baseUrl}
-                        onChange={(event) => setBaseUrl(event.target.value)}
-                        placeholder="https://gotify.example.com"
-                        required
-                        disabled={isLoading || isSaving || isTesting}
-                      />
-                    </label>
-                    <label className="settings-field">
-                      <span className="settings-label">Client token</span>
-                      <span className="settings-hint">Found in Gotify → Clients</span>
-                      <input
-                        type="password"
-                        value={token}
-                        onChange={(event) => setToken(event.target.value)}
-                        placeholder={hasStoredToken ? "Leave blank to keep existing" : "Enter Gotify client token"}
-                        required={!hasStoredToken}
-                        autoComplete="off"
-                        disabled={isLoading || isSaving || isTesting}
-                      />
-                    </label>
-                  </div>
-                </div>
-
-                <div className="settings-group">
-                  <p className="settings-group-title">Notifications</p>
-                  <div className="settings-card">
-                    <label className="settings-field">
-                      <span className="settings-label">Minimum priority</span>
-                      <span className="settings-hint">Only notify for messages at this priority or above (0–10)</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={10}
-                        value={minPriority}
-                        onChange={(event) => setMinPriority(Number(event.target.value || 0))}
-                        disabled={isLoading || isSaving || isTesting}
-                      />
-                    </label>
-                    <div className="settings-field">
-                      <span className="settings-label">Quiet hours</span>
-                      <span className="settings-hint">Suppress notifications between these hours (24-hour clock)</span>
-                      <div className="settings-two-col">
-                        <label>
-                          <span className="settings-sublabel">From</span>
-                          <input
-                            type="number"
-                            min={0}
-                            max={23}
-                            value={quietStart}
-                            onChange={(event) => setQuietStart(event.target.value)}
-                            placeholder="22"
-                            disabled={isLoading || isSaving || isTesting}
-                          />
-                        </label>
-                        <label>
-                          <span className="settings-sublabel">Until</span>
-                          <input
-                            type="number"
-                            min={0}
-                            max={23}
-                            value={quietEnd}
-                            onChange={(event) => setQuietEnd(event.target.value)}
-                            placeholder="7"
-                            disabled={isLoading || isSaving || isTesting}
-                          />
-                        </label>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="settings-group">
-                  <p className="settings-group-title">Behaviour</p>
-                  <div className="settings-card">
-                    <label className="settings-field">
-                      <span className="settings-label">Message cache size</span>
-                      <span className="settings-hint">Maximum messages stored locally (1–2000)</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={2000}
-                        value={cacheLimit}
-                        onChange={(event) => setCacheLimit(Number(event.target.value || 100))}
-                        disabled={isLoading || isSaving || isTesting}
-                      />
-                    </label>
-                    <label className="settings-toggle">
-                      <span className="settings-label">Launch at login</span>
-                      <input
-                        type="checkbox"
-                        checked={launchAtLogin}
-                        onChange={(event) => setLaunchAtLogin(event.target.checked)}
-                        disabled={isLoading || isSaving || isTesting}
-                      />
-                    </label>
-                    <label className="settings-toggle">
-                      <span className="settings-label">Start minimized to tray</span>
-                      <input
-                        type="checkbox"
-                        checked={startMinimizedToTray}
-                        onChange={(event) => setStartMinimizedToTray(event.target.checked)}
-                        disabled={isLoading || isSaving || isTesting}
-                      />
-                    </label>
-                  </div>
-                </div>
-
-                <div className="settings-group">
-                  <p className="settings-group-title">Appearance</p>
-                  <div className="settings-card">
-                    <label className="settings-field">
-                      <span className="settings-label">Theme</span>
-                      <select
-                        value={themePreference}
-                        onChange={(event) => setThemePreference(event.target.value as ThemePreference)}
-                        disabled={isLoading || isSaving || isTesting}
-                      >
-                        <option value="system">System (follows macOS)</option>
-                        <option value="light">Light</option>
-                        <option value="dark">Dark</option>
-                        <option value="dracula">Dracula</option>
-                      </select>
-                    </label>
-                  </div>
-                </div>
-
-                <div className="settings-actions">
-                  <button type="submit" disabled={isLoading || isSaving || isTesting}>
-                    {isSaving ? "Saving..." : "Save Settings"}
-                  </button>
-                  <button type="button" onClick={onTest} disabled={isLoading || isSaving || isTesting}>
-                    {isTesting ? "Testing..." : "Test Connection"}
-                  </button>
-                </div>
-
-                {feedback ? (
-                  <div className={feedback.kind === "ok" ? "feedback ok" : "feedback error"}>
-                    {feedback.message}
-                  </div>
-                ) : null}
-
-              </form>
+              <SettingsForm
+                baseUrl={baseUrl}
+                token={token}
+                hasStoredToken={hasStoredToken}
+                minPriority={minPriority}
+                quietStart={quietStart}
+                quietEnd={quietEnd}
+                cacheLimit={cacheLimit}
+                launchAtLogin={launchAtLogin}
+                startMinimizedToTray={startMinimizedToTray}
+                themePreference={themePreference}
+                isLoading={isLoading}
+                isSaving={isSaving}
+                isTesting={isTesting}
+                feedback={feedback}
+                onSave={onSave}
+                onTest={onTest}
+                setBaseUrl={setBaseUrl}
+                setToken={setToken}
+                setMinPriority={setMinPriority}
+                setQuietStart={setQuietStart}
+                setQuietEnd={setQuietEnd}
+                setCacheLimit={setCacheLimit}
+                setLaunchAtLogin={setLaunchAtLogin}
+                setStartMinimizedToTray={setStartMinimizedToTray}
+                setThemePreference={setThemePreference}
+              />
             ) : null}
 
             {drawerTab === "diagnostics" ? (
-              <>
-                <div className="diagnostics">
-                  <div><span>Version:</span> <strong>v{__APP_VERSION__}</strong></div>
-                  <div><span>Server:</span> <strong>{baseUrl || "—"}</strong></div>
-                  <div><span>Connection:</span> <strong>{diagnostics?.connection_state ?? connectionState}</strong></div>
-                  <div><span>Cached messages:</span> <strong>{messages.length}</strong></div>
-                  <div>
-                    <span>Last connected:</span>{" "}
-                    <strong>
-                      {diagnostics?.last_connected_at
-                        ? new Date(diagnostics.last_connected_at * 1000).toLocaleString()
-                        : "Never"}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>Last stream event:</span>{" "}
-                    <strong>
-                      {diagnostics?.last_stream_event_at
-                        ? new Date(diagnostics.last_stream_event_at * 1000).toLocaleString()
-                        : "Never"}
-                    </strong>
-                  </div>
-                  <div><span>Stream idle:</span> <strong>{diagnostics?.stale_for_seconds ?? 0}s</strong></div>
-                  <div><span>Reconnect attempts:</span> <strong>{diagnostics?.reconnect_attempts ?? 0}</strong></div>
-                  {(diagnostics?.backoff_seconds ?? 0) > 0 ? (
-                    <div><span>Backoff:</span> <strong>{diagnostics!.backoff_seconds}s</strong></div>
-                  ) : null}
-                  <div>
-                    <span>Last message:</span>{" "}
-                    <strong>
-                      {diagnostics?.last_message_at
-                        ? `${new Date(diagnostics.last_message_at * 1000).toLocaleString()} (id ${diagnostics.last_message_id ?? "?"})`
-                        : "Never"}
-                    </strong>
-                  </div>
-                  {diagnostics?.last_error ? (
-                    <div>
-                      <span>Last error:</span>{" "}
-                      <strong style={{ color: "var(--pill-disconnected-color)" }}>{diagnostics.last_error}</strong>
-                    </div>
-                  ) : null}
-                </div>
-                <div className="actions" style={{ marginTop: 12 }}>
-                  <button
-                    type="button"
-                    className="utility-button"
-                    onClick={() => { void invoke("restart_stream").catch(() => {}); }}
-                  >
-                    Force Reconnect
-                  </button>
-                </div>
-              </>
+              <DiagnosticsPanel
+                appVersion={__APP_VERSION__}
+                baseUrl={baseUrl}
+                connectionState={connectionState}
+                diagnostics={diagnostics}
+                messageCount={messages.length}
+                streamIdleSeconds={streamIdleSeconds}
+                onForceReconnect={() => {
+                  void invoke("restart_stream").catch(() => {});
+                }}
+              />
             ) : null}
           </div>
             </aside>
@@ -1466,125 +1097,4 @@ export function App() {
       </section>
     </main>
   );
-}
-
-function toUiMessage(message: GotifyMessage): UiMessage {
-  // async: false makes the return type `string` rather than `string | Promise<string>`,
-  // avoiding the silent `[object Promise]` bug if marked ever defaults to async mode.
-  const html = marked.parse(message.message || "", { gfm: true, breaks: true, async: false });
-  const urls = extractPlainUrls(message.message || "");
-  const parsedTs = Date.parse(message.date || "");
-  return {
-    ...message,
-    rendered_html: DOMPurify.sanitize(html),
-    primary_url: urls.length > 0 ? urls[0] : null,
-    parsed_ts: Number.isNaN(parsedTs) ? null : parsedTs,
-    formatted_time: formatDateTime(message.date),
-  };
-}
-
-function mergeUiMessages(current: UiMessage[], incoming: GotifyMessage[]): UiMessage[] {
-  // Return current untouched when the backend sends nothing — an empty response
-  // is a transient condition (startup race, cache miss) and should not wipe the UI.
-  if (incoming.length === 0) return current;
-  const currentById = new Map<number, UiMessage>(current.map((item) => [item.id, item]));
-  return incoming.map((message) => {
-    const existing = currentById.get(message.id);
-    if (existing && isSameRawMessage(existing, message)) {
-      return existing;
-    }
-    return toUiMessage(message);
-  });
-}
-
-function isSameRawMessage(current: UiMessage, next: GotifyMessage): boolean {
-  return (
-    current.id === next.id &&
-    current.app_id === next.app_id &&
-    current.title === next.title &&
-    current.message === next.message &&
-    current.priority === next.priority &&
-    current.app === next.app &&
-    current.app_icon === next.app_icon &&
-    current.date === next.date
-  );
-}
-
-function extractPlainUrls(text: string): string[] {
-  const withoutMarkdownLinks = text
-    .replace(/!\[[^\]]*]\((https?:\/\/[^)\s]+)(?:\s+["'][^"']*["'])?\)/gi, " ")
-    .replace(/\[[^\]]*]\((https?:\/\/[^)\s]+)(?:\s+["'][^"']*["'])?\)/gi, " ")
-    .replace(/<https?:\/\/[^>\s]+>/gi, " ");
-  const matches = withoutMarkdownLinks.match(/https?:\/\/[^\s)]+/g);
-  if (!matches) return [];
-  return Array.from(
-    new Set(
-      matches.map((url) => url.replace(/[.,!?;:]+$/g, ""))
-    )
-  );
-}
-
-function formatPauseDuration(totalSeconds: number): string {
-  const seconds = Math.max(0, Math.floor(totalSeconds));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const remMinutes = minutes % 60;
-  if (remMinutes === 0) return `${hours}h`;
-  return `${hours}h ${remMinutes}m`;
-}
-
-function compareMessagesNewestFirst(a: UiMessage, b: UiMessage): number {
-  const ta = a.parsed_ts;
-  const tb = b.parsed_ts;
-  if (tb != null && ta != null && tb !== ta) {
-    return tb - ta;
-  }
-  if (tb != null && ta == null) return -1;
-  if (ta != null && tb == null) return 1;
-  return b.id - a.id;
-}
-
-function computeWindowRange(
-  total: number,
-  scrollTop: number,
-  viewportHeight: number,
-  rowHeightEstimate: number
-): { start: number; end: number } {
-  if (total <= 0) return { start: 0, end: 0 };
-  const rowHeight = Math.max(WINDOW_MIN_ROW_HEIGHT, Math.min(WINDOW_MAX_ROW_HEIGHT, rowHeightEstimate));
-  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - WINDOW_OVERSCAN);
-  const visibleCount = Math.ceil(viewportHeight / rowHeight);
-  const end = Math.min(total - 1, start + visibleCount + WINDOW_OVERSCAN * 2);
-  return { start, end };
-}
-
-function formatDateTime(value: string): string {
-  const ts = Date.parse(value || "");
-  if (Number.isNaN(ts)) {
-    return "Unknown time";
-  }
-  const date = new Date(ts);
-  const abs = date.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-  return `${abs} (${relativeTime(ts)})`;
-}
-
-function relativeTime(ts: number): string {
-  const diffSec = Math.round((ts - Date.now()) / 1000);
-  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-  const abs = Math.abs(diffSec);
-  if (abs < 60) return rtf.format(diffSec, "second");
-  const min = Math.round(diffSec / 60);
-  if (Math.abs(min) < 60) return rtf.format(min, "minute");
-  const hr = Math.round(min / 60);
-  if (Math.abs(hr) < 24) return rtf.format(hr, "hour");
-  const day = Math.round(hr / 24);
-  return rtf.format(day, "day");
 }

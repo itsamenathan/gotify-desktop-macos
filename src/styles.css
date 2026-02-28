@@ -590,7 +590,9 @@ p {
 .quick-message-icon {
   width: 18px;
   height: 18px;
-  object-fit: cover;
+  object-fit: contain;
+  box-sizing: border-box;
+  padding: 1px;
   border-radius: 5px;
   background: #d5e4f8;
 }

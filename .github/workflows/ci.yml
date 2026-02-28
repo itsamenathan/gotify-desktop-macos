@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify build
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Check Rust backend
+        run: cargo check --locked
+        working-directory: src-tauri
+
+  release-build:
+    name: Build release bundles
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-latest
+    needs: verify
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Tauri app
+        run: npm run tauri build
+
+      - name: Package app bundle as zip
+        run: |
+          shopt -s nullglob
+          apps=(src-tauri/target/release/bundle/macos/*.app)
+          if [ ${#apps[@]} -eq 0 ]; then
+            echo "No .app bundle found"
+            exit 1
+          fi
+          APP_PATH="${apps[0]}"
+          ZIP_PATH="src-tauri/target/release/bundle/macos/gotify-desktop-${{ github.ref_name }}-macos-app.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
+
+      - name: Upload macOS app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: gotify-desktop-${{ github.ref_name }}-macos-app
+          path: src-tauri/target/release/bundle/macos/gotify-desktop-${{ github.ref_name }}-macos-app.zip
+          if-no-files-found: error
+
+      - name: Upload DMG bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: gotify-desktop-${{ github.ref_name }}-macos-dmg
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      - name: Create GitHub release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            src-tauri/target/release/bundle/macos/gotify-desktop-${{ github.ref_name }}-macos-app.zip
+            src-tauri/target/release/bundle/dmg/*.dmg

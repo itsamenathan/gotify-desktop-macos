@@ -109,6 +109,10 @@ Typical release flow:
 ```bash
 git checkout main
 git pull
+npm run version:set -- 0.2.0
+git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
+git commit -m "chore: bump version to 0.2.0"
+git push origin main
 git tag v0.2.0
 git push origin v0.2.0
 ```
@@ -116,5 +120,6 @@ git push origin v0.2.0
 What happens on tag push:
 - CI runs verification checks.
 - A release build runs (`npm run tauri build`) on macOS.
+- Release CI also syncs app version from the tag (`vX.Y.Z` -> `X.Y.Z`) before building, to keep bundle names/version metadata aligned with the tag.
 - Artifacts are uploaded to the workflow run (`.dmg` and zipped `.app`).
 - A GitHub Release is created/updated automatically with generated release notes and attached assets.

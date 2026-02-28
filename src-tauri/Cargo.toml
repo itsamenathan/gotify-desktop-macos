@@ -1,6 +1,6 @@
 [package]
 name = "gotify-desktop"
-version = "0.1.0"
+version = "0.2.1"
 description = "Tray-first Gotify desktop client"
 authors = ["nwarner"]
 edition = "2021"

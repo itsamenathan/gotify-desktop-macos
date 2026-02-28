@@ -28,12 +28,20 @@ tauriConf.version = version;
 fs.writeFileSync(tauriConfPath, `${JSON.stringify(tauriConf, null, 2)}\n`);
 
 const cargoToml = fs.readFileSync(cargoTomlPath, "utf8");
+const cargoVersionPattern = /(^\[package\][\s\S]*?^version\s*=\s*")([^"]+)("\s*$)/m;
+const cargoMatch = cargoToml.match(cargoVersionPattern);
+if (!cargoMatch) {
+  console.error("Failed to find package version in src-tauri/Cargo.toml");
+  process.exit(1);
+}
+
+const currentCargoVersion = cargoMatch[2];
 const nextCargoToml = cargoToml.replace(
-  /(^\[package\][\s\S]*?^version\s*=\s*")([^"]+)("\s*$)/m,
+  cargoVersionPattern,
   `$1${version}$3`
 );
 
-if (nextCargoToml === cargoToml) {
+if (nextCargoToml === cargoToml && currentCargoVersion !== version) {
   console.error("Failed to update version in src-tauri/Cargo.toml");
   process.exit(1);
 }

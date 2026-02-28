@@ -56,8 +56,8 @@ export function App() {
   const [token, setToken] = useState("");
   const [minPriority, setMinPriority] = useState(0);
   const [cacheLimit, setCacheLimit] = useState(100);
-  const [launchAtLogin, setLaunchAtLogin] = useState(true);
-  const [startMinimizedToTray, setStartMinimizedToTray] = useState(true);
+  const [launchAtLogin, setLaunchAtLogin] = useState(false);
+  const [startMinimizedToTray, setStartMinimizedToTray] = useState(false);
   const [quietStart, setQuietStart] = useState("");
   const [quietEnd, setQuietEnd] = useState("");
   const [hasStoredToken, setHasStoredToken] = useState(false);
@@ -401,8 +401,8 @@ export function App() {
         setHasStoredToken(settings.has_token);
         setMinPriority(settings.min_priority ?? 0);
         setCacheLimit(settings.cache_limit ?? 100);
-        setLaunchAtLogin(settings.launch_at_login ?? true);
-        setStartMinimizedToTray(settings.start_minimized_to_tray ?? true);
+        setLaunchAtLogin(settings.launch_at_login ?? false);
+        setStartMinimizedToTray(settings.start_minimized_to_tray ?? false);
         setPauseUntil(settings.pause_until ?? null);
         setPauseMode(normalizePauseMode(settings.pause_mode));
         setQuietStart(settings.quiet_hours_start == null ? "" : String(settings.quiet_hours_start));
@@ -665,8 +665,8 @@ export function App() {
       setHasStoredToken(refreshed.has_token);
       setMinPriority(refreshed.min_priority ?? 0);
       setCacheLimit(refreshed.cache_limit ?? 100);
-      setLaunchAtLogin(refreshed.launch_at_login ?? true);
-      setStartMinimizedToTray(refreshed.start_minimized_to_tray ?? true);
+      setLaunchAtLogin(refreshed.launch_at_login ?? false);
+      setStartMinimizedToTray(refreshed.start_minimized_to_tray ?? false);
       setPauseUntil(refreshed.pause_until ?? null);
       setPauseMode(normalizePauseMode(refreshed.pause_mode));
       setQuietStart(refreshed.quiet_hours_start == null ? "" : String(refreshed.quiet_hours_start));

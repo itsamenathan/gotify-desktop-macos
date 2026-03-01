@@ -489,6 +489,7 @@ fn main() {
             } else {
                 ui_shell::show_main_window(app.handle());
             }
+            ui_shell::sync_activation_policy(app.handle());
 
             let pause_items = pause::create_pause_menu_items(app.handle())?;
             let open_item = MenuItem::with_id(app, "open_inbox", "Open Inbox", true, None::<&str>)?;

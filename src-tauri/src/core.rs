@@ -1,14 +1,15 @@
 use base64::Engine as _;
 use serde::Serialize;
+#[cfg(debug_assertions)]
+use std::io::Write as _;
 use std::{
     fs,
-    io::Write as _,
     os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
     sync::atomic::Ordering,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::{FILE_SUFFIX_COUNTER, SETTINGS_FILE};
 
@@ -21,7 +22,7 @@ pub(crate) struct DeleteMessageDebugEvent {
     pub(crate) status: Option<u16>,
 }
 
-pub(crate) fn settings_file(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn settings_file<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let config_dir = app
         .path()
         .app_config_dir()
@@ -33,7 +34,7 @@ pub(crate) fn settings_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(config_dir.join("settings.json"))
 }
 
-pub(crate) fn messages_file(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn messages_file<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let config_dir = app
         .path()
         .app_config_dir()
@@ -114,6 +115,9 @@ pub(crate) fn unique_time_suffix() -> u64 {
 }
 
 pub(crate) fn debug_log(message: &str) {
+    #[cfg(not(debug_assertions))]
+    let _ = message;
+
     #[cfg(debug_assertions)]
     {
         let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");

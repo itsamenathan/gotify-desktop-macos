@@ -1,11 +1,12 @@
 import { FormEvent } from "react";
-import type { ThemePreference } from "../types";
+import type { PriorityThreshold, ThemePreference } from "../types";
 
 type SettingsFormProps = {
   baseUrl: string;
   token: string;
   hasStoredToken: boolean;
   minPriority: number;
+  priorityThresholds: PriorityThreshold[];
   quietStart: string;
   quietEnd: string;
   cacheLimit: number;
@@ -15,12 +16,15 @@ type SettingsFormProps = {
   isLoading: boolean;
   isSaving: boolean;
   isTesting: boolean;
+  testConnectionFlash: "ok" | "error" | null;
   feedback: { kind: "ok" | "error"; message: string } | null;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
   onTest: () => void;
   setBaseUrl: (value: string) => void;
   setToken: (value: string) => void;
   setMinPriority: (value: number) => void;
+  setPriorityThresholds: (value: PriorityThreshold[]) => void;
+  onResetPriorityThresholds: () => void;
   setQuietStart: (value: string) => void;
   setQuietEnd: (value: string) => void;
   setCacheLimit: (value: number) => void;
@@ -35,6 +39,7 @@ export function SettingsForm(props: SettingsFormProps) {
     token,
     hasStoredToken,
     minPriority,
+    priorityThresholds,
     quietStart,
     quietEnd,
     cacheLimit,
@@ -44,12 +49,15 @@ export function SettingsForm(props: SettingsFormProps) {
     isLoading,
     isSaving,
     isTesting,
+    testConnectionFlash,
     feedback,
     onSave,
     onTest,
     setBaseUrl,
     setToken,
     setMinPriority,
+    setPriorityThresholds,
+    onResetPriorityThresholds,
     setQuietStart,
     setQuietEnd,
     setCacheLimit,
@@ -58,9 +66,15 @@ export function SettingsForm(props: SettingsFormProps) {
     setThemePreference,
   } = props;
   const disabled = isLoading || isSaving || isTesting;
+  const themeBadgeColor = getThemeBadgeColor();
+  const addThreshold = () => {
+    const last = priorityThresholds[priorityThresholds.length - 1];
+    const nextValue = last ? last.value + 1 : 0;
+    setPriorityThresholds([...priorityThresholds, { value: nextValue, color: "#E25555" }]);
+  };
 
   return (
-    <form className="settings-form" onSubmit={onSave}>
+    <form id="settings-form" className="settings-form" onSubmit={onSave}>
       <div className="settings-group">
         <p className="settings-group-title">Connection</p>
         <div className="settings-card">
@@ -88,6 +102,24 @@ export function SettingsForm(props: SettingsFormProps) {
               disabled={disabled}
             />
           </label>
+          <div className="settings-field">
+            <div className="settings-inline-actions">
+              <button
+                type="button"
+                className={
+                  testConnectionFlash === "ok"
+                    ? "secondary-button test-connection-button flash-ok"
+                    : testConnectionFlash === "error"
+                      ? "secondary-button test-connection-button flash-error"
+                      : "secondary-button test-connection-button"
+                }
+                onClick={onTest}
+                disabled={disabled}
+              >
+                {isTesting ? "Testing..." : "Test Connection"}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -106,6 +138,81 @@ export function SettingsForm(props: SettingsFormProps) {
               disabled={disabled}
             />
           </label>
+          <div className="settings-field">
+            <span className="settings-label">Priority colors</span>
+            <span className="settings-hint">Thresholds apply when priority is greater than or equal to each value</span>
+            <div className="threshold-list">
+              {priorityThresholds.map((threshold, index) => {
+                const nextThreshold = priorityThresholds[index + 1];
+                return (
+                  <div key={`${threshold.value}-${index}`} className="threshold-row">
+                    <label>
+                      <span className="settings-sublabel">From</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={999}
+                        value={threshold.value}
+                        onChange={(event) => {
+                          const next = [...priorityThresholds];
+                          next[index] = {
+                            ...threshold,
+                            value: Math.max(0, Number(event.target.value || 0)),
+                          };
+                          setPriorityThresholds(next);
+                        }}
+                        disabled={disabled}
+                      />
+                    </label>
+                    <label>
+                      <span className="settings-sublabel">Color</span>
+                      <input
+                        type="color"
+                        value={toColorInputValue(threshold.color, themeBadgeColor)}
+                        onChange={(event) => {
+                          const next = [...priorityThresholds];
+                          next[index] = { ...threshold, color: event.target.value.toUpperCase() };
+                          setPriorityThresholds(next);
+                        }}
+                        disabled={disabled}
+                      />
+                    </label>
+                    <div className="threshold-preview">
+                      {nextThreshold ? `>= ${threshold.value} and < ${nextThreshold.value}` : `>= ${threshold.value}`}
+                    </div>
+                    <button
+                      type="button"
+                      className="danger-button subtle"
+                      onClick={() => {
+                        setPriorityThresholds(priorityThresholds.filter((_, rowIndex) => rowIndex !== index));
+                      }}
+                      disabled={disabled || priorityThresholds.length <= 1}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                );
+              })}
+              <div className="threshold-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={addThreshold}
+                  disabled={disabled}
+                >
+                  Add threshold
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={onResetPriorityThresholds}
+                  disabled={disabled}
+                >
+                  Reset to theme default
+                </button>
+              </div>
+            </div>
+          </div>
           <div className="settings-field">
             <span className="settings-label">Quiet hours</span>
             <span className="settings-hint">Suppress notifications between these hours (24-hour clock)</span>
@@ -194,15 +301,6 @@ export function SettingsForm(props: SettingsFormProps) {
         </div>
       </div>
 
-      <div className="settings-actions">
-        <button type="submit" disabled={disabled}>
-          {isSaving ? "Saving..." : "Save Settings"}
-        </button>
-        <button type="button" onClick={onTest} disabled={disabled}>
-          {isTesting ? "Testing..." : "Test Connection"}
-        </button>
-      </div>
-
       {feedback ? (
         <div className={feedback.kind === "ok" ? "feedback ok" : "feedback error"}>
           {feedback.message}
@@ -210,4 +308,24 @@ export function SettingsForm(props: SettingsFormProps) {
       ) : null}
     </form>
   );
+}
+
+function toColorInputValue(raw: string, themeBadgeColor: string): string {
+  if (raw === "__THEME_BADGE__") return themeBadgeColor;
+  if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw.toUpperCase();
+  return "#6B8DB6";
+}
+
+function getThemeBadgeColor(): string {
+  if (typeof window === "undefined") return "#DEEAF8";
+  const raw = getComputedStyle(document.documentElement).getPropertyValue("--badge-bg").trim();
+  const rgbMatch = raw.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+  if (rgbMatch) {
+    const toHex = (v: string) => Number(v).toString(16).padStart(2, "0");
+    return `#${toHex(rgbMatch[1])}${toHex(rgbMatch[2])}${toHex(rgbMatch[3])}`.toUpperCase();
+  }
+  if (/^#[0-9a-fA-F]{6}$/.test(raw)) {
+    return raw.toUpperCase();
+  }
+  return "#DEEAF8";
 }

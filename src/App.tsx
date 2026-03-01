@@ -11,6 +11,7 @@ import type {
   ConnectionState,
   DrawerTab,
   GotifyMessage,
+  PriorityThreshold,
   PauseMode,
   PauseStateResponse,
   RuntimeDiagnostics,
@@ -34,11 +35,42 @@ import {
 
 const THEME_STORAGE_KEY = "gotify-theme-preference";
 const PAUSE_FOREVER_SENTINEL = 0;
+const THEME_BADGE_SENTINEL = "__THEME_BADGE__";
+const DEFAULT_PRIORITY_THRESHOLDS: PriorityThreshold[] = [
+  { value: 0, color: THEME_BADGE_SENTINEL },
+];
 
 function loadThemePreference(): ThemePreference {
   if (typeof window === "undefined") return "system";
   const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
   return stored === "light" || stored === "dark" || stored === "system" || stored === "dracula" ? stored : "system";
+}
+
+function normalizePriorityThresholds(input: PriorityThreshold[] | null | undefined): PriorityThreshold[] {
+  const source = input && input.length > 0 ? input : DEFAULT_PRIORITY_THRESHOLDS;
+  const sanitized = source.map((threshold) => ({
+    value: Math.max(0, Number.isFinite(threshold.value) ? Math.floor(threshold.value) : 0),
+    color:
+      threshold.color === THEME_BADGE_SENTINEL ||
+      (threshold.value === 0 && threshold.color.toUpperCase() === "#DEEAF8")
+        ? THEME_BADGE_SENTINEL
+        : /^#[0-9a-fA-F]{6}$/.test(threshold.color)
+          ? threshold.color.toUpperCase()
+          : "#6B8DB6",
+  }));
+  sanitized.sort((a, b) => a.value - b.value);
+
+  const deduped: PriorityThreshold[] = [];
+  for (const threshold of sanitized) {
+    const last = deduped[deduped.length - 1];
+    if (last && last.value === threshold.value) {
+      deduped[deduped.length - 1] = threshold;
+    } else {
+      deduped.push(threshold);
+    }
+  }
+
+  return deduped.length > 0 ? deduped : [...DEFAULT_PRIORITY_THRESHOLDS];
 }
 
 function GearIcon() {
@@ -50,12 +82,28 @@ function GearIcon() {
   );
 }
 
+function CloseIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      style={{ width: 16, height: 16, fill: "none", stroke: "currentColor", strokeWidth: 2.2, strokeLinecap: "round" }}
+    >
+      <path d="M6 6l12 12" />
+      <path d="M18 6l-12 12" />
+    </svg>
+  );
+}
+
 export function App() {
   const [connectionState, setConnectionState] = useState<ConnectionState>("Disconnected");
   const [baseUrl, setBaseUrl] = useState("");
   const [token, setToken] = useState("");
   const [minPriority, setMinPriority] = useState(0);
+  const [priorityThresholds, setPriorityThresholds] = useState<PriorityThreshold[]>(() => [...DEFAULT_PRIORITY_THRESHOLDS]);
+  const [activePriorityThresholds, setActivePriorityThresholds] = useState<PriorityThreshold[]>(() => [...DEFAULT_PRIORITY_THRESHOLDS]);
   const [cacheLimit, setCacheLimit] = useState(100);
+  const [activeCacheLimit, setActiveCacheLimit] = useState(100);
   const [launchAtLogin, setLaunchAtLogin] = useState(false);
   const [startMinimizedToTray, setStartMinimizedToTray] = useState(false);
   const [quietStart, setQuietStart] = useState("");
@@ -75,17 +123,19 @@ export function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [testConnectionFlash, setTestConnectionFlash] = useState<"ok" | "error" | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
   const [diagnostics, setDiagnostics] = useState<RuntimeDiagnostics | null>(null);
   const [deletingMessageIds, setDeletingMessageIds] = useState<Record<string, boolean>>({});
   const [urlPreviews, setUrlPreviews] = useState<Record<string, UrlPreview | null>>({});
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
+  const [activeThemePreference, setActiveThemePreference] = useState<ThemePreference>(() => loadThemePreference());
   // JS object keys are always strings at runtime, so use Record<string, boolean>
   // to match the actual key type (message IDs coerce to string on assignment).
 
   const [pauseMenuOpen, setPauseMenuOpen] = useState(false);
   const lastRecoveryAttemptRef = useRef(0);
-  const cacheLimitRef = useRef(cacheLimit);
+  const cacheLimitRef = useRef(activeCacheLimit);
   const messageListRef = useRef<HTMLUListElement | null>(null);
   const estimatedRowHeightRef = useRef(WINDOW_DEFAULT_ROW_HEIGHT);
   const pendingScrollMessageIdRef = useRef<number | null>(null);
@@ -99,8 +149,8 @@ export function App() {
   };
 
   useEffect(() => {
-    cacheLimitRef.current = Math.max(1, cacheLimit);
-  }, [cacheLimit]);
+    cacheLimitRef.current = Math.max(1, activeCacheLimit);
+  }, [activeCacheLimit]);
 
   useEffect(() => {
     try {
@@ -400,7 +450,12 @@ export function App() {
         setBaseUrl(settings.base_url ?? "");
         setHasStoredToken(settings.has_token);
         setMinPriority(settings.min_priority ?? 0);
-        setCacheLimit(settings.cache_limit ?? 100);
+        const normalizedThresholds = normalizePriorityThresholds(settings.priority_thresholds);
+        setPriorityThresholds(normalizedThresholds);
+        setActivePriorityThresholds(normalizedThresholds);
+        const normalizedCacheLimit = settings.cache_limit ?? 100;
+        setCacheLimit(normalizedCacheLimit);
+        setActiveCacheLimit(normalizedCacheLimit);
         setLaunchAtLogin(settings.launch_at_login ?? false);
         setStartMinimizedToTray(settings.start_minimized_to_tray ?? false);
         setPauseUntil(settings.pause_until ?? null);
@@ -466,14 +521,14 @@ export function App() {
   }, [messages]);
 
   useEffect(() => {
-    window.localStorage.setItem(THEME_STORAGE_KEY, themePreference);
+    window.localStorage.setItem(THEME_STORAGE_KEY, activeThemePreference);
     const root = document.documentElement;
-    if (themePreference === "system") {
+    if (activeThemePreference === "system") {
       root.removeAttribute("data-theme");
       return;
     }
-    root.setAttribute("data-theme", themePreference);
-  }, [themePreference]);
+    root.setAttribute("data-theme", activeThemePreference);
+  }, [activeThemePreference]);
 
   // When the theme is changed in the main window, the quick window (a separate
   // WebView) won't see the React state update. The browser fires a `storage`
@@ -484,6 +539,7 @@ export function App() {
       if (event.key !== THEME_STORAGE_KEY || event.newValue === null) return;
       const val = event.newValue;
       if (val === "light" || val === "dark" || val === "system" || val === "dracula") {
+        setActiveThemePreference(val);
         setThemePreference(val);
       }
     };
@@ -500,6 +556,16 @@ export function App() {
       window.clearTimeout(timer);
     };
   }, [feedback]);
+
+  useEffect(() => {
+    if (testConnectionFlash == null) return;
+    const timer = window.setTimeout(() => {
+      setTestConnectionFlash(null);
+    }, 1400);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [testConnectionFlash]);
 
   // Keep diagnostics fresh while the diagnostics panel is open. Some macOS/WebKit
   // focus/throttle states can delay event delivery, so this lightweight poll keeps
@@ -649,11 +715,14 @@ export function App() {
     try {
       const quietHoursStart = parsedQuietStart;
       const quietHoursEnd = parsedQuietEnd;
+      const normalizedThresholds = normalizePriorityThresholds(priorityThresholds);
 
       await invoke("save_settings", {
         baseUrl,
         token,
         minPriority,
+        priorityColorMode: "thresholds",
+        priorityThresholds: normalizedThresholds,
         cacheLimit,
         launchAtLogin,
         startMinimizedToTray,
@@ -664,13 +733,19 @@ export function App() {
       const refreshed = await invoke<SettingsResponse>("load_settings");
       setHasStoredToken(refreshed.has_token);
       setMinPriority(refreshed.min_priority ?? 0);
-      setCacheLimit(refreshed.cache_limit ?? 100);
+      const refreshedThresholds = normalizePriorityThresholds(refreshed.priority_thresholds);
+      setPriorityThresholds(refreshedThresholds);
+      setActivePriorityThresholds(refreshedThresholds);
+      const refreshedCacheLimit = refreshed.cache_limit ?? 100;
+      setCacheLimit(refreshedCacheLimit);
+      setActiveCacheLimit(refreshedCacheLimit);
       setLaunchAtLogin(refreshed.launch_at_login ?? false);
       setStartMinimizedToTray(refreshed.start_minimized_to_tray ?? false);
       setPauseUntil(refreshed.pause_until ?? null);
       setPauseMode(normalizePauseMode(refreshed.pause_mode));
       setQuietStart(refreshed.quiet_hours_start == null ? "" : String(refreshed.quiet_hours_start));
       setQuietEnd(refreshed.quiet_hours_end == null ? "" : String(refreshed.quiet_hours_end));
+      setActiveThemePreference(themePreference);
       setToken("");
       setFeedback({ kind: "ok", message: "Settings saved. Reconnecting..." });
       setDrawerTab(null);
@@ -684,19 +759,24 @@ export function App() {
   };
 
   const onTest = async () => {
-    setFeedback(null);
     setIsTesting(true);
+    setTestConnectionFlash(null);
     try {
-      const message = await invoke<string>("test_connection", {
+      await invoke<string>("test_connection", {
         baseUrl,
         token: token.trim().length > 0 ? token : null,
       });
-      setFeedback({ kind: "ok", message });
+      setTestConnectionFlash("ok");
     } catch (error) {
-      setFeedback({ kind: "error", message: String(error) });
+      console.error(error);
+      setTestConnectionFlash("error");
     } finally {
       setIsTesting(false);
     }
+  };
+
+  const onResetPriorityThresholds = () => {
+    setPriorityThresholds([...DEFAULT_PRIORITY_THRESHOLDS]);
   };
 
   const onPause = async (minutes: number) => {
@@ -1009,6 +1089,7 @@ export function App() {
           messageListRef={messageListRef}
           deletingMessageIds={deletingMessageIds}
           urlPreviews={urlPreviews}
+          priorityThresholds={activePriorityThresholds}
           applySelection={applySelection}
           setSelectedMessageId={setSelectedMessageId}
           setWindowRange={setWindowRange}
@@ -1022,28 +1103,76 @@ export function App() {
               className={drawerTab ? "drawer-backdrop open" : "drawer-backdrop"}
               onClick={() => setDrawerTab(null)}
             />
+            {drawerTab === "settings" ? (
+              <aside className="drawer-side-info" aria-label="About Gotify Desktop">
+                <div className="drawer-side-atmosphere" aria-hidden="true" />
+                <div className="drawer-side-card">
+                  <div className="drawer-side-brand">
+                    <span className="drawer-side-logo-wrap">
+                      <img src={gotifyLogo} alt="" className="drawer-side-logo" />
+                    </span>
+                    <div>
+                      <div className="drawer-side-kicker">Desktop Companion</div>
+                      <div className="drawer-side-title">Gotify Desktop</div>
+                      <div className="drawer-side-version">Version {__APP_VERSION__}</div>
+                    </div>
+                  </div>
+                  <p className="drawer-side-summary">
+                    Native macOS companion for your Gotify server: real-time message stream, focused inbox, and notification controls.
+                  </p>
+                  <div className="drawer-side-links">
+                    <a href="https://github.com/itsamenathan/gotify-desktop-macos" target="_blank" rel="noreferrer">
+                      Project GitHub
+                    </a>
+                    <a href="https://gotify.net/" target="_blank" rel="noreferrer">
+                      Gotify Website
+                    </a>
+                  </div>
+                </div>
+              </aside>
+            ) : null}
             <aside className={drawerTab ? "drawer-panel open" : "drawer-panel"} aria-hidden={drawerTab == null}>
           <div className="drawer-head">
             <h2>{drawerTab === "diagnostics" ? "Diagnostics" : "Settings"}</h2>
-            <button type="button" className="utility-button" onClick={() => setDrawerTab(null)}>
-              Close
+            <button
+              type="button"
+              className="utility-button icon-button"
+              aria-label="Close panel"
+              title="Close panel"
+              onClick={() => setDrawerTab(null)}
+            >
+              <CloseIcon />
             </button>
           </div>
           <div className="drawer-tabs">
-            <button
-              type="button"
-              className={drawerTab === "settings" ? "drawer-tab active" : "drawer-tab"}
-              onClick={() => setDrawerTab("settings")}
-            >
-              Settings
-            </button>
-            <button
-              type="button"
-              className={drawerTab === "diagnostics" ? "drawer-tab active" : "drawer-tab"}
-              onClick={() => setDrawerTab("diagnostics")}
-            >
-              Diagnostics
-            </button>
+            <div className="drawer-tab-list">
+              <button
+                type="button"
+                className={drawerTab === "settings" ? "drawer-tab active" : "drawer-tab"}
+                onClick={() => setDrawerTab("settings")}
+              >
+                Settings
+              </button>
+              <button
+                type="button"
+                className={drawerTab === "diagnostics" ? "drawer-tab active" : "drawer-tab"}
+                onClick={() => setDrawerTab("diagnostics")}
+              >
+                Diagnostics
+              </button>
+            </div>
+            <div className="drawer-tab-actions">
+              {drawerTab === "settings" ? (
+                <button
+                  type="submit"
+                  form="settings-form"
+                  className="drawer-save-button"
+                  disabled={isLoading || isSaving || isTesting}
+                >
+                  {isSaving ? "Saving..." : "Save"}
+                </button>
+              ) : null}
+            </div>
           </div>
 
           <div className="drawer-body">
@@ -1053,6 +1182,7 @@ export function App() {
                 token={token}
                 hasStoredToken={hasStoredToken}
                 minPriority={minPriority}
+                priorityThresholds={priorityThresholds}
                 quietStart={quietStart}
                 quietEnd={quietEnd}
                 cacheLimit={cacheLimit}
@@ -1062,12 +1192,15 @@ export function App() {
                 isLoading={isLoading}
                 isSaving={isSaving}
                 isTesting={isTesting}
+                testConnectionFlash={testConnectionFlash}
                 feedback={feedback}
                 onSave={onSave}
                 onTest={onTest}
                 setBaseUrl={setBaseUrl}
                 setToken={setToken}
                 setMinPriority={setMinPriority}
+                setPriorityThresholds={setPriorityThresholds}
+                onResetPriorityThresholds={onResetPriorityThresholds}
                 setQuietStart={setQuietStart}
                 setQuietEnd={setQuietEnd}
                 setCacheLimit={setCacheLimit}
@@ -1079,7 +1212,6 @@ export function App() {
 
             {drawerTab === "diagnostics" ? (
               <DiagnosticsPanel
-                appVersion={__APP_VERSION__}
                 baseUrl={baseUrl}
                 connectionState={connectionState}
                 diagnostics={diagnostics}

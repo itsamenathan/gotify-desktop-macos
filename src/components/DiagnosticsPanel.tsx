@@ -1,7 +1,6 @@
 import type { ConnectionState, RuntimeDiagnostics } from "../types";
 
 type DiagnosticsPanelProps = {
-  appVersion: string;
   baseUrl: string;
   connectionState: ConnectionState;
   diagnostics: RuntimeDiagnostics | null;
@@ -11,7 +10,6 @@ type DiagnosticsPanelProps = {
 };
 
 export function DiagnosticsPanel({
-  appVersion,
   baseUrl,
   connectionState,
   diagnostics,
@@ -22,7 +20,6 @@ export function DiagnosticsPanel({
   return (
     <>
       <div className="diagnostics">
-        <div><span>Version:</span> <strong>v{appVersion}</strong></div>
         <div><span>Server:</span> <strong>{baseUrl || "—"}</strong></div>
         <div><span>Connection:</span> <strong>{diagnostics?.connection_state ?? connectionState}</strong></div>
         <div><span>Cached messages:</span> <strong>{messageCount}</strong></div>

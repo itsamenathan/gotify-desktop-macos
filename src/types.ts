@@ -4,6 +4,9 @@ export type SettingsResponse = {
   base_url: string;
   has_token: boolean;
   min_priority: number;
+  priority_color_mode: PriorityColorMode;
+  priority_thresholds: PriorityThreshold[];
+  priority_gradient: PriorityGradient;
   cache_limit: number;
   launch_at_login: boolean;
   start_minimized_to_tray: boolean;
@@ -67,6 +70,17 @@ export type UrlPreview = {
 export type ThemePreference = "system" | "light" | "dark" | "dracula";
 export type DrawerTab = "settings" | "diagnostics";
 export type PauseMode = "15m" | "1h" | "custom" | "forever";
+export type PriorityColorMode = "gradient" | "thresholds";
+export type PriorityThreshold = {
+  value: number;
+  color: string;
+};
+export type PriorityGradient = {
+  min: number;
+  max: number;
+  start_color: string;
+  end_color: string;
+};
 
 export type SelectionHistoryState = {
   tag: "gotify-selection-v1";

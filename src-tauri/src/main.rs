@@ -36,7 +36,8 @@ pub(crate) use model::{
 use settings::{
     get_pause_state as get_pause_state_impl, load_settings as load_settings_impl, load_token,
     normalize_base_url, read_settings, save_settings as save_settings_impl,
-    test_connection as test_connection_impl, PauseStateResponse, SettingsResponse,
+    test_connection as test_connection_impl, PauseStateResponse, PriorityColorMode,
+    PriorityGradient, PriorityThreshold, SettingsResponse,
 };
 
 /// Resolved at startup; must be set before any `load_settings` / `save_settings` call.
@@ -55,6 +56,9 @@ fn save_settings(
     base_url: String,
     token: String,
     min_priority: Option<i64>,
+    priority_color_mode: Option<PriorityColorMode>,
+    priority_thresholds: Option<Vec<PriorityThreshold>>,
+    priority_gradient: Option<PriorityGradient>,
     cache_limit: Option<usize>,
     launch_at_login: Option<bool>,
     start_minimized_to_tray: Option<bool>,
@@ -66,6 +70,9 @@ fn save_settings(
         base_url,
         token,
         min_priority,
+        priority_color_mode,
+        priority_thresholds,
+        priority_gradient,
         cache_limit,
         launch_at_login,
         start_minimized_to_tray,

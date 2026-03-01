@@ -8,11 +8,110 @@ use crate::{
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct PriorityThreshold {
+    pub(crate) value: i64,
+    pub(crate) color: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PriorityColorMode {
+    Gradient,
+    Thresholds,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct PriorityGradient {
+    pub(crate) min: i64,
+    pub(crate) max: i64,
+    pub(crate) start_color: String,
+    pub(crate) end_color: String,
+}
+
+fn default_priority_color_mode() -> PriorityColorMode {
+    PriorityColorMode::Gradient
+}
+
+fn default_priority_thresholds() -> Vec<PriorityThreshold> {
+    vec![PriorityThreshold {
+        value: 0,
+        color: "__THEME_BADGE__".to_string(),
+    }]
+}
+
+fn default_priority_gradient() -> PriorityGradient {
+    PriorityGradient {
+        min: 0,
+        max: 10,
+        start_color: "#67C26F".to_string(),
+        end_color: "#E25555".to_string(),
+    }
+}
+
+fn normalize_priority_thresholds(
+    incoming: Option<Vec<PriorityThreshold>>,
+    fallback: &[PriorityThreshold],
+) -> Vec<PriorityThreshold> {
+    let mut thresholds = incoming.unwrap_or_else(|| fallback.to_vec());
+    if thresholds.is_empty() {
+        thresholds = default_priority_thresholds();
+    }
+    for threshold in &mut thresholds {
+        threshold.value = threshold.value.max(0);
+        if threshold.color != "__THEME_BADGE__" && !is_hex_color(&threshold.color) {
+            threshold.color = "#6B8DB6".to_string();
+        }
+        if threshold.value == 0 && threshold.color.eq_ignore_ascii_case("#DEEAF8") {
+            threshold.color = "__THEME_BADGE__".to_string();
+        }
+    }
+    thresholds.sort_by_key(|entry| entry.value);
+    thresholds.dedup_by(|a, b| a.value == b.value);
+    if thresholds.is_empty() {
+        return default_priority_thresholds();
+    }
+    thresholds
+}
+
+fn normalize_priority_gradient(
+    incoming: Option<PriorityGradient>,
+    fallback: &PriorityGradient,
+) -> PriorityGradient {
+    let mut gradient = incoming.unwrap_or_else(|| fallback.clone());
+    gradient.min = gradient.min.max(0);
+    gradient.max = gradient.max.max(0);
+    if gradient.max <= gradient.min {
+        gradient.max = gradient.min + 1;
+    }
+    if !is_hex_color(&gradient.start_color) {
+        gradient.start_color = fallback.start_color.clone();
+    }
+    if !is_hex_color(&gradient.end_color) {
+        gradient.end_color = fallback.end_color.clone();
+    }
+    gradient
+}
+
+fn is_hex_color(value: &str) -> bool {
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() != 7 || chars[0] != '#' {
+        return false;
+    }
+    chars[1..].iter().all(|ch| ch.is_ascii_hexdigit())
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub(crate) struct StoredSettings {
     pub(crate) base_url: String,
     pub(crate) token: Option<String>,
     pub(crate) min_priority: i64,
+    #[serde(default = "default_priority_color_mode")]
+    pub(crate) priority_color_mode: PriorityColorMode,
+    #[serde(default = "default_priority_thresholds")]
+    pub(crate) priority_thresholds: Vec<PriorityThreshold>,
+    #[serde(default = "default_priority_gradient")]
+    pub(crate) priority_gradient: PriorityGradient,
     pub(crate) cache_limit: usize,
     pub(crate) launch_at_login: bool,
     pub(crate) start_minimized_to_tray: bool,
@@ -28,6 +127,9 @@ impl Default for StoredSettings {
             base_url: String::new(),
             token: None,
             min_priority: 0,
+            priority_color_mode: default_priority_color_mode(),
+            priority_thresholds: default_priority_thresholds(),
+            priority_gradient: default_priority_gradient(),
             cache_limit: DEFAULT_CACHE_LIMIT,
             launch_at_login: false,
             start_minimized_to_tray: false,
@@ -44,6 +146,9 @@ pub(crate) struct SettingsResponse {
     pub(crate) base_url: String,
     pub(crate) has_token: bool,
     pub(crate) min_priority: i64,
+    pub(crate) priority_color_mode: PriorityColorMode,
+    pub(crate) priority_thresholds: Vec<PriorityThreshold>,
+    pub(crate) priority_gradient: PriorityGradient,
     pub(crate) cache_limit: usize,
     pub(crate) launch_at_login: bool,
     pub(crate) start_minimized_to_tray: bool,
@@ -61,6 +166,11 @@ pub(crate) struct PauseStateResponse {
 
 pub(crate) fn load_settings<R: Runtime>(app: &AppHandle<R>) -> Result<SettingsResponse, String> {
     let stored = read_settings(app)?;
+    let priority_thresholds =
+        normalize_priority_thresholds(Some(stored.priority_thresholds.clone()), &[]);
+    let default_gradient = default_priority_gradient();
+    let priority_gradient =
+        normalize_priority_gradient(Some(stored.priority_gradient.clone()), &default_gradient);
     let has_token = stored
         .token
         .as_deref()
@@ -70,6 +180,9 @@ pub(crate) fn load_settings<R: Runtime>(app: &AppHandle<R>) -> Result<SettingsRe
         base_url: stored.base_url,
         has_token,
         min_priority: stored.min_priority,
+        priority_color_mode: stored.priority_color_mode,
+        priority_thresholds,
+        priority_gradient,
         cache_limit: normalize_cache_limit(stored.cache_limit),
         launch_at_login: stored.launch_at_login,
         start_minimized_to_tray: stored.start_minimized_to_tray,
@@ -85,6 +198,9 @@ pub(crate) fn save_settings<R: Runtime>(
     base_url: String,
     token: String,
     min_priority: Option<i64>,
+    priority_color_mode: Option<PriorityColorMode>,
+    priority_thresholds: Option<Vec<PriorityThreshold>>,
+    priority_gradient: Option<PriorityGradient>,
     cache_limit: Option<usize>,
     launch_at_login: Option<bool>,
     start_minimized_to_tray: Option<bool>,
@@ -99,6 +215,14 @@ pub(crate) fn save_settings<R: Runtime>(
     let current = read_settings(app).unwrap_or_default();
     let quiet_start = quiet_hours_start.or(current.quiet_hours_start);
     let quiet_end = quiet_hours_end.or(current.quiet_hours_end);
+    let next_thresholds =
+        normalize_priority_thresholds(priority_thresholds, &current.priority_thresholds);
+    let next_color_mode =
+        priority_color_mode.unwrap_or_else(|| current.priority_color_mode.clone());
+    let default_gradient = default_priority_gradient();
+    let current_gradient =
+        normalize_priority_gradient(Some(current.priority_gradient.clone()), &default_gradient);
+    let next_gradient = normalize_priority_gradient(priority_gradient, &current_gradient);
 
     let new_token = if token.trim().is_empty() {
         debug_log("save_settings: no new token provided, keeping existing");
@@ -126,6 +250,9 @@ pub(crate) fn save_settings<R: Runtime>(
             base_url: normalized_url.clone(),
             token: new_token,
             min_priority: min_priority.unwrap_or(current.min_priority).clamp(0, 10),
+            priority_color_mode: next_color_mode,
+            priority_thresholds: next_thresholds,
+            priority_gradient: next_gradient,
             cache_limit: normalize_cache_limit(cache_limit.unwrap_or(current.cache_limit)),
             launch_at_login: launch_at_login.unwrap_or(current.launch_at_login),
             start_minimized_to_tray: start_minimized_to_tray

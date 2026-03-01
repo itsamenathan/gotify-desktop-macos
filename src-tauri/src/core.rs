@@ -117,7 +117,6 @@ pub(crate) fn unique_time_suffix() -> u64 {
 pub(crate) fn debug_log(message: &str) {
     #[cfg(not(debug_assertions))]
     let _ = message;
-
     #[cfg(debug_assertions)]
     {
         let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");

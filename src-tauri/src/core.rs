@@ -9,7 +9,7 @@ use std::{
     sync::atomic::Ordering,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::{FILE_SUFFIX_COUNTER, SETTINGS_FILE};
 
@@ -22,7 +22,7 @@ pub(crate) struct DeleteMessageDebugEvent {
     pub(crate) status: Option<u16>,
 }
 
-pub(crate) fn settings_file(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn settings_file<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let config_dir = app
         .path()
         .app_config_dir()
@@ -34,7 +34,7 @@ pub(crate) fn settings_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(config_dir.join("settings.json"))
 }
 
-pub(crate) fn messages_file(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn messages_file<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let config_dir = app
         .path()
         .app_config_dir()
@@ -114,11 +114,13 @@ pub(crate) fn unique_time_suffix() -> u64 {
     FILE_SUFFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-pub(crate) fn debug_log(_message: &str) {
+pub(crate) fn debug_log(message: &str) {
+    #[cfg(not(debug_assertions))]
+    let _ = message;
     #[cfg(debug_assertions)]
     {
         let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-        let line = format!("[gotify-desktop][{ts}] {_message}\n");
+        let line = format!("[gotify-desktop][{ts}] {message}\n");
         eprint!("{line}");
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)

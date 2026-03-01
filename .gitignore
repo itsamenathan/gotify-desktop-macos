@@ -31,3 +31,6 @@ pnpm-debug.log*
 # Runtime state
 *.pid
 *.pid.lock
+
+# Codex local metadata
+.codex/

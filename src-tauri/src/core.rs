@@ -1,8 +1,9 @@
 use base64::Engine as _;
 use serde::Serialize;
+#[cfg(debug_assertions)]
+use std::io::Write as _;
 use std::{
     fs,
-    io::Write as _,
     os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
     sync::atomic::Ordering,
@@ -113,11 +114,11 @@ pub(crate) fn unique_time_suffix() -> u64 {
     FILE_SUFFIX_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-pub(crate) fn debug_log(message: &str) {
+pub(crate) fn debug_log(_message: &str) {
     #[cfg(debug_assertions)]
     {
         let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-        let line = format!("[gotify-desktop][{ts}] {message}\n");
+        let line = format!("[gotify-desktop][{ts}] {_message}\n");
         eprint!("{line}");
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)

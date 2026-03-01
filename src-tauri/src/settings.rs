@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{fs, time::Duration};
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 
 use crate::{
     apply_launch_at_login, debug_log, get_settings_path, normalize_cache_limit,
@@ -59,7 +59,7 @@ pub(crate) struct PauseStateResponse {
     pub(crate) pause_mode: Option<String>,
 }
 
-pub(crate) fn load_settings(app: &AppHandle) -> Result<SettingsResponse, String> {
+pub(crate) fn load_settings<R: Runtime>(app: &AppHandle<R>) -> Result<SettingsResponse, String> {
     let stored = read_settings(app)?;
     let has_token = stored
         .token
@@ -80,8 +80,8 @@ pub(crate) fn load_settings(app: &AppHandle) -> Result<SettingsResponse, String>
     })
 }
 
-pub(crate) fn save_settings(
-    app: &AppHandle,
+pub(crate) fn save_settings<R: Runtime>(
+    app: &AppHandle<R>,
     base_url: String,
     token: String,
     min_priority: Option<i64>,
@@ -204,7 +204,7 @@ pub(crate) async fn test_connection(
     ))
 }
 
-pub(crate) fn get_pause_state(app: &AppHandle) -> Result<PauseStateResponse, String> {
+pub(crate) fn get_pause_state<R: Runtime>(app: &AppHandle<R>) -> Result<PauseStateResponse, String> {
     let settings = read_settings(app)?;
     Ok(PauseStateResponse {
         pause_until: settings.pause_until,
@@ -212,7 +212,7 @@ pub(crate) fn get_pause_state(app: &AppHandle) -> Result<PauseStateResponse, Str
     })
 }
 
-pub(crate) fn read_settings(app: &AppHandle) -> Result<StoredSettings, String> {
+pub(crate) fn read_settings<R: Runtime>(app: &AppHandle<R>) -> Result<StoredSettings, String> {
     let path = settings_file(app)?;
     if !path.exists() {
         return Ok(StoredSettings::default());
@@ -224,8 +224,8 @@ pub(crate) fn read_settings(app: &AppHandle) -> Result<StoredSettings, String> {
         .map_err(|error| format!("Failed to parse settings: {error}"))
 }
 
-pub(crate) fn save_non_secret_settings(
-    app: &AppHandle,
+pub(crate) fn save_non_secret_settings<R: Runtime>(
+    app: &AppHandle<R>,
     settings: &StoredSettings,
 ) -> Result<(), String> {
     let path = settings_file(app)?;

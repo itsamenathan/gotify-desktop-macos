@@ -10,6 +10,7 @@ pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+    sync_activation_policy(app);
 }
 
 pub(crate) fn position_quick_window_under_tray<R: Runtime>(
@@ -107,6 +108,7 @@ pub(crate) fn toggle_main_window<R: Runtime>(app: &AppHandle<R>) {
             let _ = window.set_focus();
         }
     }
+    sync_activation_policy(app);
 }
 
 pub(crate) fn handle_window_event<R: Runtime>(window: &tauri::Window<R>, event: &WindowEvent) {
@@ -114,6 +116,7 @@ pub(crate) fn handle_window_event<R: Runtime>(window: &tauri::Window<R>, event: 
         if let WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
             let _ = window.hide();
+            sync_activation_policy(&window.app_handle());
         }
         return;
     }
@@ -140,4 +143,23 @@ pub(crate) fn tray_icon_for_status(status: &str) -> Option<Image<'static>> {
         _ => include_bytes!("../icons/tray-disconnected.png").as_slice(),
     };
     Image::from_bytes(bytes).ok().map(|icon| icon.to_owned())
+}
+
+pub(crate) fn sync_activation_policy<R: Runtime>(app: &AppHandle<R>) {
+    #[cfg(target_os = "macos")]
+    {
+        let tray_mode_enabled = crate::settings::read_settings(app)
+            .map(|settings| settings.start_minimized_to_tray)
+            .unwrap_or(false);
+        let main_is_visible = app
+            .get_webview_window("main")
+            .and_then(|window| window.is_visible().ok())
+            .unwrap_or(false);
+        let desired_policy = if tray_mode_enabled && !main_is_visible {
+            tauri::ActivationPolicy::Accessory
+        } else {
+            tauri::ActivationPolicy::Regular
+        };
+        let _ = app.set_activation_policy(desired_policy);
+    }
 }

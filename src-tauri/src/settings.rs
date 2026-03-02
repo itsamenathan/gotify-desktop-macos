@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{fs, time::Duration};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
     apply_launch_at_login, debug_log, get_settings_path, normalize_cache_limit,
@@ -141,7 +141,7 @@ impl Default for StoredSettings {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub(crate) struct SettingsResponse {
     pub(crate) base_url: String,
     pub(crate) has_token: bool,
@@ -158,14 +158,7 @@ pub(crate) struct SettingsResponse {
     pub(crate) quiet_hours_end: Option<u8>,
 }
 
-#[derive(Debug, Serialize)]
-pub(crate) struct PauseStateResponse {
-    pub(crate) pause_until: Option<u64>,
-    pub(crate) pause_mode: Option<String>,
-}
-
-pub(crate) fn load_settings<R: Runtime>(app: &AppHandle<R>) -> Result<SettingsResponse, String> {
-    let stored = read_settings(app)?;
+fn to_settings_response(stored: StoredSettings) -> SettingsResponse {
     let priority_thresholds =
         normalize_priority_thresholds(Some(stored.priority_thresholds.clone()), &[]);
     let default_gradient = default_priority_gradient();
@@ -176,7 +169,7 @@ pub(crate) fn load_settings<R: Runtime>(app: &AppHandle<R>) -> Result<SettingsRe
         .as_deref()
         .map_or(false, |t| !t.trim().is_empty());
 
-    Ok(SettingsResponse {
+    SettingsResponse {
         base_url: stored.base_url,
         has_token,
         min_priority: stored.min_priority,
@@ -190,7 +183,12 @@ pub(crate) fn load_settings<R: Runtime>(app: &AppHandle<R>) -> Result<SettingsRe
         pause_mode: stored.pause_mode,
         quiet_hours_start: stored.quiet_hours_start,
         quiet_hours_end: stored.quiet_hours_end,
-    })
+    }
+}
+
+pub(crate) fn load_settings<R: Runtime>(app: &AppHandle<R>) -> Result<SettingsResponse, String> {
+    let stored = read_settings(app)?;
+    Ok(to_settings_response(stored))
 }
 
 pub(crate) fn save_settings<R: Runtime>(
@@ -206,12 +204,17 @@ pub(crate) fn save_settings<R: Runtime>(
     start_minimized_to_tray: Option<bool>,
     quiet_hours_start: Option<u8>,
     quiet_hours_end: Option<u8>,
-) -> Result<(), String> {
+) -> Result<SettingsResponse, String> {
     debug_log(&format!(
         "save_settings called: base_url={base_url:?} token_len={} min_priority={min_priority:?} cache_limit={cache_limit:?}",
         token.trim().len()
     ));
     let normalized_url = normalize_base_url(&base_url)?;
+    let state = app.state::<crate::AppState>();
+    let _settings_guard = state
+        .settings_lock
+        .lock()
+        .map_err(|_| "Settings lock poisoned".to_string())?;
     let current = read_settings(app).unwrap_or_default();
     let quiet_start = quiet_hours_start.or(current.quiet_hours_start);
     let quiet_end = quiet_hours_end.or(current.quiet_hours_end);
@@ -244,25 +247,23 @@ pub(crate) fn save_settings<R: Runtime>(
         Some(token.trim().to_string())
     };
 
-    save_non_secret_settings(
-        app,
-        &StoredSettings {
-            base_url: normalized_url.clone(),
-            token: new_token,
-            min_priority: min_priority.unwrap_or(current.min_priority).clamp(0, 10),
-            priority_color_mode: next_color_mode,
-            priority_thresholds: next_thresholds,
-            priority_gradient: next_gradient,
-            cache_limit: normalize_cache_limit(cache_limit.unwrap_or(current.cache_limit)),
-            launch_at_login: launch_at_login.unwrap_or(current.launch_at_login),
-            start_minimized_to_tray: start_minimized_to_tray
-                .unwrap_or(current.start_minimized_to_tray),
-            pause_until: current.pause_until,
-            pause_mode: current.pause_mode,
-            quiet_hours_start: quiet_start.map(|h| h % 24),
-            quiet_hours_end: quiet_end.map(|h| h % 24),
-        },
-    )?;
+    let next_settings = StoredSettings {
+        base_url: normalized_url.clone(),
+        token: new_token,
+        min_priority: min_priority.unwrap_or(current.min_priority).clamp(0, 10),
+        priority_color_mode: next_color_mode,
+        priority_thresholds: next_thresholds,
+        priority_gradient: next_gradient,
+        cache_limit: normalize_cache_limit(cache_limit.unwrap_or(current.cache_limit)),
+        launch_at_login: launch_at_login.unwrap_or(current.launch_at_login),
+        start_minimized_to_tray: start_minimized_to_tray.unwrap_or(current.start_minimized_to_tray),
+        pause_until: current.pause_until,
+        pause_mode: current.pause_mode,
+        quiet_hours_start: quiet_start.map(|h| h % 24),
+        quiet_hours_end: quiet_end.map(|h| h % 24),
+    };
+
+    save_non_secret_settings(app, &next_settings)?;
     debug_log("save_settings: settings (including token) written to disk");
 
     #[cfg(target_os = "macos")]
@@ -271,7 +272,7 @@ pub(crate) fn save_settings<R: Runtime>(
     }
 
     debug_log("save_settings: complete");
-    Ok(())
+    Ok(to_settings_response(next_settings))
 }
 
 pub(crate) async fn test_connection(
@@ -331,14 +332,6 @@ pub(crate) async fn test_connection(
     ))
 }
 
-pub(crate) fn get_pause_state<R: Runtime>(app: &AppHandle<R>) -> Result<PauseStateResponse, String> {
-    let settings = read_settings(app)?;
-    Ok(PauseStateResponse {
-        pause_until: settings.pause_until,
-        pause_mode: settings.pause_mode,
-    })
-}
-
 pub(crate) fn read_settings<R: Runtime>(app: &AppHandle<R>) -> Result<StoredSettings, String> {
     let path = settings_file(app)?;
     if !path.exists() {
@@ -358,7 +351,12 @@ pub(crate) fn save_non_secret_settings<R: Runtime>(
     let path = settings_file(app)?;
     let content = serde_json::to_string_pretty(settings)
         .map_err(|error| format!("Failed to serialize settings: {error}"))?;
-    fs::write(&path, content).map_err(|error| format!("Failed to write settings: {error}"))?;
+    let tmp_path = path.with_extension(format!("tmp-{}", crate::unique_time_suffix()));
+    fs::write(&tmp_path, content)
+        .map_err(|error| format!("Failed to write settings temp file: {error}"))?;
+    restrict_file_permissions(&tmp_path);
+    fs::rename(&tmp_path, &path)
+        .map_err(|error| format!("Failed to atomically replace settings: {error}"))?;
     restrict_file_permissions(&path);
     Ok(())
 }

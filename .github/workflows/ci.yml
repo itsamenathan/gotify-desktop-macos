@@ -43,6 +43,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Enforce frontend-backend standard
+        run: npm run standard:check
+
       - name: Build frontend
         run: npm run build
 

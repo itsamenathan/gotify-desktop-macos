@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{collections::HashMap, sync::Mutex};
+use tauri::ipc::Channel;
 use tauri::menu::MenuItem;
 use tokio::sync::watch;
 
@@ -17,6 +19,10 @@ pub(crate) struct AppState {
     pub(crate) messages: Mutex<Vec<CachedMessage>>,
     pub(crate) app_meta: Mutex<HashMap<i64, ApplicationMeta>>,
     pub(crate) tray_pause_menu: Mutex<Option<TrayPauseMenuState>>,
+    pub(crate) revisions: Mutex<RevisionState>,
+    pub(crate) update_channels: Mutex<HashMap<String, Channel<Value>>>,
+    pub(crate) settings_lock: Mutex<()>,
+    pub(crate) message_persist_lock: Mutex<()>,
 }
 
 impl AppState {
@@ -26,6 +32,69 @@ impl AppState {
             messages: Mutex::new(messages),
             app_meta: Mutex::new(HashMap::new()),
             tray_pause_menu: Mutex::new(None),
+            revisions: Mutex::new(RevisionState::default()),
+            update_channels: Mutex::new(HashMap::new()),
+            settings_lock: Mutex::new(()),
+            message_persist_lock: Mutex::new(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RevisionKey {
+    Settings,
+    Pause,
+    Messages,
+    Connection,
+    Runtime,
+    StreamError,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RevisionState {
+    pub(crate) settings: u64,
+    pub(crate) pause: u64,
+    pub(crate) messages: u64,
+    pub(crate) connection: u64,
+    pub(crate) runtime: u64,
+    pub(crate) stream_error: u64,
+}
+
+impl RevisionState {
+    pub(crate) fn current(&self, key: RevisionKey) -> u64 {
+        match key {
+            RevisionKey::Settings => self.settings,
+            RevisionKey::Pause => self.pause,
+            RevisionKey::Messages => self.messages,
+            RevisionKey::Connection => self.connection,
+            RevisionKey::Runtime => self.runtime,
+            RevisionKey::StreamError => self.stream_error,
+        }
+    }
+
+    pub(crate) fn bump(&mut self, key: RevisionKey) -> u64 {
+        let slot = match key {
+            RevisionKey::Settings => &mut self.settings,
+            RevisionKey::Pause => &mut self.pause,
+            RevisionKey::Messages => &mut self.messages,
+            RevisionKey::Connection => &mut self.connection,
+            RevisionKey::Runtime => &mut self.runtime,
+            RevisionKey::StreamError => &mut self.stream_error,
+        };
+        *slot = slot.saturating_add(1);
+        *slot
+    }
+}
+
+impl Default for RevisionState {
+    fn default() -> Self {
+        Self {
+            settings: 1,
+            pause: 1,
+            messages: 1,
+            connection: 1,
+            runtime: 1,
+            stream_error: 1,
         }
     }
 }

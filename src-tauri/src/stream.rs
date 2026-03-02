@@ -1,5 +1,5 @@
 use futures_util::{SinkExt, StreamExt};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tokio::sync::watch;
 use tokio_tungstenite::{
     connect_async,
@@ -9,7 +9,7 @@ use tokio_tungstenite::{
 use crate::{
     debug_log,
     diagnostics::{
-        emit_runtime_diagnostics, mark_stream_activity, snapshot_runtime, RuntimeDiagnostics,
+        mark_stream_activity, publish_runtime_snapshot, snapshot_runtime, RuntimeDiagnostics,
     },
     messages, redact_ws_url,
     settings::{build_stream_ws_url, load_token, normalize_base_url, read_settings},
@@ -24,18 +24,6 @@ pub(crate) fn start_stream(app: AppHandle, token: Option<String>) -> Result<(), 
 
 pub(crate) fn stop_stream(app: AppHandle) -> Result<(), String> {
     stop_stream_internal(&app)
-}
-
-pub(crate) fn get_connection_state(app: AppHandle) -> Result<String, String> {
-    let state = app.state::<AppState>();
-    let runtime = state
-        .runtime
-        .lock()
-        .map_err(|_| "Runtime lock poisoned".to_string())?;
-    if runtime.connection_state.is_empty() {
-        return Ok("Disconnected".to_string());
-    }
-    Ok(runtime.connection_state.clone())
 }
 
 pub(crate) fn get_runtime_diagnostics(app: AppHandle) -> Result<RuntimeDiagnostics, String> {
@@ -97,8 +85,8 @@ fn start_stream_internal(app: AppHandle, token_override: Option<String>) -> Resu
         runtime.reconnect_attempts = 0;
         drop(runtime);
 
-        emit_connection_state(&app, "Connecting");
-        emit_runtime_diagnostics(&app);
+        update_connection_state(&app, "Connecting");
+        publish_runtime_snapshot(&app);
         let app_for_task = app.clone();
         debug_log("spawning stream task");
         tauri::async_runtime::spawn(async move {
@@ -146,7 +134,8 @@ fn stop_stream_internal(app: &AppHandle) -> Result<(), String> {
     runtime.backoff_seconds = 0;
     drop(runtime);
 
-    emit_connection_state(app, "Disconnected");
+    update_connection_state(app, "Disconnected");
+    publish_runtime_snapshot(app);
     Ok(())
 }
 
@@ -165,7 +154,7 @@ async fn run_stream_loop(
             break;
         }
 
-        emit_connection_state(&app, "Connecting");
+        update_connection_state(&app, "Connecting");
         debug_log("attempting stream connection");
         match stream_once(&app, &base_url, &token, &mut stop_rx).await {
             Ok(()) => {
@@ -173,8 +162,8 @@ async fn run_stream_loop(
                     break;
                 }
                 debug_log("stream session ended without error");
-                emit_connection_state(&app, "Disconnected");
-                emit_runtime_diagnostics(&app);
+                update_connection_state(&app, "Disconnected");
+                publish_runtime_snapshot(&app);
             }
             Err(err) => {
                 if *stop_rx.borrow() {
@@ -182,8 +171,8 @@ async fn run_stream_loop(
                 }
 
                 debug_log(&format!("stream loop error: {err}"));
-                emit_connection_state(&app, "Backoff");
-                let _ = app.emit("connection-error", truncate_message(&err, 200));
+                update_connection_state(&app, "Backoff");
+                let _ = crate::contract::publish_stream_error(&app, truncate_message(&err, 200));
                 if let Some(state) = app.try_state::<AppState>() {
                     if let Ok(mut runtime) = state.runtime.lock() {
                         runtime.last_error = Some(truncate_message(&err, 300));
@@ -191,7 +180,7 @@ async fn run_stream_loop(
                         runtime.reconnect_attempts = runtime.reconnect_attempts.saturating_add(1);
                     }
                 }
-                emit_runtime_diagnostics(&app);
+                publish_runtime_snapshot(&app);
 
                 let jitter_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -209,15 +198,19 @@ async fn run_stream_loop(
     }
 
     let state = app.state::<AppState>();
+    let mut should_emit_disconnected = false;
     if let Ok(mut runtime) = state.runtime.lock() {
         if runtime.stream_epoch == task_epoch {
             runtime.stop_tx = None;
             runtime.should_run = false;
             runtime.backoff_seconds = 0;
+            should_emit_disconnected = true;
         }
     }
-    emit_connection_state(&app, "Disconnected");
-    emit_runtime_diagnostics(&app);
+    if should_emit_disconnected {
+        update_connection_state(&app, "Disconnected");
+    }
+    publish_runtime_snapshot(&app);
 }
 
 async fn stream_once(
@@ -260,8 +253,8 @@ async fn stream_once(
             runtime.backoff_seconds = 0;
         }
     }
-    emit_connection_state(app, "Connected");
-    emit_runtime_diagnostics(app);
+    update_connection_state(app, "Connected");
+    publish_runtime_snapshot(app);
     let mut sync_interval =
         tokio::time::interval(std::time::Duration::from_secs(STREAM_SYNC_INTERVAL_SECS));
     sync_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -336,7 +329,7 @@ async fn stream_once(
             _ = liveness_interval.tick() => {
                 let event_now = unix_now_secs();
                 if event_now.saturating_sub(last_activity_at) < STREAM_LIVENESS_IDLE_SECS {
-                    emit_runtime_diagnostics(app);
+                    publish_runtime_snapshot(app);
                     continue;
                 }
                 match pending_ping_since {
@@ -357,24 +350,21 @@ async fn stream_once(
                         }
                     }
                 }
-                emit_runtime_diagnostics(app);
+                publish_runtime_snapshot(app);
             }
         }
     }
 }
 
-fn emit_connection_state(app: &AppHandle, status: &str) {
+fn update_connection_state(app: &AppHandle, status: &str) {
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(mut runtime) = state.runtime.lock() {
             runtime.connection_state = status.to_string();
         }
     }
 
-    if let Err(error) = app.emit("connection-state", status) {
-        debug_log(&format!("failed to emit connection-state: {error}"));
-    }
+    let _ = crate::contract::publish_connection_update(app, status.to_string());
     if let Some(tray) = app.tray_by_id("main-tray") {
         let _ = tray.set_icon(crate::ui_shell::tray_icon_for_status(status));
     }
-    emit_runtime_diagnostics(app);
 }

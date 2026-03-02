@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "standard:check": "node scripts/check-standard.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",

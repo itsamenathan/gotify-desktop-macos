@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import gotifyLogo from "./assets/gotify-logo.png";
@@ -7,22 +7,27 @@ import { DiagnosticsPanel } from "./components/DiagnosticsPanel";
 import { MessageFeed } from "./components/MessageFeed";
 import { SettingsForm } from "./components/SettingsForm";
 import type {
+  AppUpdate,
   AppGroup,
+  BootstrapState,
   ConnectionState,
+  DomainSnapshot,
   DrawerTab,
   GotifyMessage,
+  MessageRemovedData,
+  PauseStateData,
   PriorityThreshold,
   PauseMode,
-  PauseStateResponse,
   RuntimeDiagnostics,
   SelectionHistoryState,
   SettingsResponse,
+  StreamErrorData,
   ThemePreference,
   UiMessage,
   UrlPreview,
 } from "./types";
 import { debugUi } from "./utils/debug";
-import { compareMessagesNewestFirst, mergeUiMessages, toUiMessage } from "./utils/messages";
+import { compareMessagesNewestFirst, toUiMessage } from "./utils/messages";
 import { normalizePauseMode, normalizeSelectionMessageId, isSelectionHistoryState } from "./utils/selection";
 import { formatPauseDuration } from "./utils/time";
 import {
@@ -39,6 +44,15 @@ const THEME_BADGE_SENTINEL = "__THEME_BADGE__";
 const DEFAULT_PRIORITY_THRESHOLDS: PriorityThreshold[] = [
   { value: 0, color: THEME_BADGE_SENTINEL },
 ];
+
+type RevisionTracker = {
+  settings: number;
+  pause: number;
+  messages: number;
+  connection: number;
+  runtime: number;
+  stream_error: number;
+};
 
 function loadThemePreference(): ThemePreference {
   if (typeof window === "undefined") return "system";
@@ -71,6 +85,10 @@ function normalizePriorityThresholds(input: PriorityThreshold[] | null | undefin
   }
 
   return deduped.length > 0 ? deduped : [...DEFAULT_PRIORITY_THRESHOLDS];
+}
+
+function toUiMessagesSnapshot(messages: GotifyMessage[]): UiMessage[] {
+  return messages.map((message) => toUiMessage(message));
 }
 
 function GearIcon() {
@@ -135,6 +153,15 @@ export function App() {
 
   const [pauseMenuOpen, setPauseMenuOpen] = useState(false);
   const lastRecoveryAttemptRef = useRef(0);
+  const revisionsRef = useRef<RevisionTracker>({
+    settings: 0,
+    pause: 0,
+    messages: 0,
+    connection: 0,
+    runtime: 0,
+    stream_error: 0,
+  });
+  const updateChannelRef = useRef<Channel<AppUpdate> | null>(null);
   const cacheLimitRef = useRef(activeCacheLimit);
   const messageListRef = useRef<HTMLUListElement | null>(null);
   const estimatedRowHeightRef = useRef(WINDOW_DEFAULT_ROW_HEIGHT);
@@ -148,13 +175,128 @@ export function App() {
     setPauseMode((current) => (current === normalizedMode ? current : normalizedMode));
   };
 
+  const applySettingsSnapshot = (snapshot: DomainSnapshot<SettingsResponse>) => {
+    if (snapshot.revision <= revisionsRef.current.settings) return false;
+    revisionsRef.current.settings = snapshot.revision;
+    const settings = snapshot.data;
+    setBaseUrl(settings.base_url ?? "");
+    setHasStoredToken(settings.has_token);
+    setMinPriority(settings.min_priority ?? 0);
+    const normalizedThresholds = normalizePriorityThresholds(settings.priority_thresholds);
+    setPriorityThresholds(normalizedThresholds);
+    setActivePriorityThresholds(normalizedThresholds);
+    const normalizedCacheLimit = settings.cache_limit ?? 100;
+    setCacheLimit(normalizedCacheLimit);
+    setActiveCacheLimit(normalizedCacheLimit);
+    setLaunchAtLogin(settings.launch_at_login ?? false);
+    setStartMinimizedToTray(settings.start_minimized_to_tray ?? false);
+    setQuietStart(settings.quiet_hours_start == null ? "" : String(settings.quiet_hours_start));
+    setQuietEnd(settings.quiet_hours_end == null ? "" : String(settings.quiet_hours_end));
+    applyPauseState(settings.pause_until ?? null, settings.pause_mode ?? null);
+    return true;
+  };
+
+  const applyPauseSnapshot = (snapshot: DomainSnapshot<PauseStateData>) => {
+    if (snapshot.revision <= revisionsRef.current.pause) return false;
+    revisionsRef.current.pause = snapshot.revision;
+    applyPauseState(snapshot.data.pause_until ?? null, snapshot.data.pause_mode ?? null);
+    return true;
+  };
+
+  const applyMessagesReplaceSnapshot = (snapshot: DomainSnapshot<GotifyMessage[]>) => {
+    if (snapshot.revision <= revisionsRef.current.messages) return false;
+    revisionsRef.current.messages = snapshot.revision;
+    setMessages(toUiMessagesSnapshot(snapshot.data));
+    return true;
+  };
+
+  const applyMessageUpsertSnapshot = (snapshot: DomainSnapshot<GotifyMessage>) => {
+    if (snapshot.revision <= revisionsRef.current.messages) return false;
+    revisionsRef.current.messages = snapshot.revision;
+    const incoming = toUiMessage(snapshot.data);
+    setMessages((current) => {
+      const withoutExisting = current.filter((item) => item.id !== incoming.id);
+      return [incoming, ...withoutExisting].slice(0, cacheLimitRef.current);
+    });
+    return true;
+  };
+
+  const applyMessageRemoveSnapshot = (snapshot: DomainSnapshot<MessageRemovedData>) => {
+    if (snapshot.revision <= revisionsRef.current.messages) return false;
+    revisionsRef.current.messages = snapshot.revision;
+    setMessages((current) => current.filter((item) => item.id !== snapshot.data.message_id));
+    return true;
+  };
+
+  const applyConnectionSnapshot = (snapshot: DomainSnapshot<{ state: ConnectionState }>) => {
+    if (snapshot.revision <= revisionsRef.current.connection) return false;
+    revisionsRef.current.connection = snapshot.revision;
+    setConnectionState(snapshot.data.state);
+    return true;
+  };
+
+  const applyRuntimeSnapshot = (snapshot: DomainSnapshot<RuntimeDiagnostics>) => {
+    if (snapshot.revision <= revisionsRef.current.runtime) return false;
+    revisionsRef.current.runtime = snapshot.revision;
+    setDiagnostics(snapshot.data);
+    setConnectionState(snapshot.data.connection_state);
+    return true;
+  };
+
+  const applyStreamErrorSnapshot = (snapshot: DomainSnapshot<StreamErrorData>) => {
+    if (snapshot.revision <= revisionsRef.current.stream_error) return false;
+    revisionsRef.current.stream_error = snapshot.revision;
+    setFeedback({ kind: "error", message: snapshot.data.message });
+    return true;
+  };
+
+  const applyBootstrap = (bootstrap: BootstrapState) => {
+    applySettingsSnapshot(bootstrap.settings);
+    applyPauseSnapshot(bootstrap.pause);
+    applyMessagesReplaceSnapshot(bootstrap.messages);
+    applyConnectionSnapshot(bootstrap.connection);
+    applyRuntimeSnapshot(bootstrap.runtime);
+  };
+
+  const handleAppUpdate = (update: AppUpdate) => {
+    switch (update.type) {
+      case "settings.updated":
+        applySettingsSnapshot(update.payload);
+        return;
+      case "pause.updated":
+        applyPauseSnapshot(update.payload);
+        return;
+      case "messages.replace":
+        applyMessagesReplaceSnapshot(update.payload);
+        return;
+      case "messages.upsert":
+        applyMessageUpsertSnapshot(update.payload);
+        return;
+      case "messages.remove":
+        applyMessageRemoveSnapshot(update.payload);
+        return;
+      case "connection.updated":
+        applyConnectionSnapshot(update.payload);
+        return;
+      case "runtime.updated":
+        applyRuntimeSnapshot(update.payload);
+        return;
+      case "stream.error":
+        applyStreamErrorSnapshot(update.payload);
+        return;
+      default:
+        return;
+    }
+  };
+
   useEffect(() => {
     cacheLimitRef.current = Math.max(1, activeCacheLimit);
   }, [activeCacheLimit]);
 
   useEffect(() => {
     try {
-      setIsQuickWindow(getCurrentWebviewWindow().label === "quick");
+      const label = getCurrentWebviewWindow().label;
+      setIsQuickWindow(label === "quick");
     } catch {
       setIsQuickWindow(false);
     }
@@ -312,53 +454,9 @@ export function App() {
   }, [isQuickWindow]);
 
   useEffect(() => {
-    // `destroyed` is set to true synchronously in the cleanup function.
-    // Each .then() checks it before storing the unlisten handle: if the component
-    // already unmounted while the listen() promise was in-flight, we call the
-    // returned unlisten function immediately so the IPC subscription is released.
     let destroyed = false;
-    let unlistenConnection: (() => void) | undefined;
-    let unlistenMessage: (() => void) | undefined;
     let unlistenNotification: (() => void) | undefined;
     let unlistenNotificationClicked: (() => void) | undefined;
-    let unlistenError: (() => void) | undefined;
-    let unlistenDiagnostics: (() => void) | undefined;
-    let unlistenMessagesSynced: (() => void) | undefined;
-    let unlistenMessagesUpdated: (() => void) | undefined;
-    let unlistenNotificationsPaused: (() => void) | undefined;
-    let unlistenNotificationsResumed: (() => void) | undefined;
-    let unlistenPauseState: (() => void) | undefined;
-    let unlistenPauseMode: (() => void) | undefined;
-
-    listen<ConnectionState>("connection-state", (event) => {
-      setConnectionState(event.payload);
-    }).then((fn) => {
-      if (destroyed) { fn(); return; }
-      unlistenConnection = fn;
-    });
-
-    listen<GotifyMessage>("message-received", (event) => {
-      debugUi("message-received handled", { id: event.payload.id, at: Date.now() });
-      const incoming = toUiMessage(event.payload);
-      setMessages((current) => {
-        const withoutExisting = current.filter((item) => item.id !== incoming.id);
-        return [incoming, ...withoutExisting].slice(0, cacheLimitRef.current);
-      });
-      setDiagnostics((current) => {
-        if (!current) return current;
-        const nowSec = Math.floor(Date.now() / 1000);
-        return {
-          ...current,
-          last_stream_event_at: nowSec,
-          last_message_at: nowSec,
-          last_message_id: event.payload.id,
-          stale_for_seconds: 0,
-        };
-      });
-    }).then((fn) => {
-      if (destroyed) { fn(); return; }
-      unlistenMessage = fn;
-    });
 
     listen<GotifyMessage>("notification-message", (event) => {
       applySelection(String(event.payload.app_id || "all"), event.payload.id, false);
@@ -376,121 +474,36 @@ export function App() {
       unlistenNotificationClicked = fn;
     });
 
-    listen<string>("connection-error", (event) => {
-      setFeedback({ kind: "error", message: event.payload });
-    }).then((fn) => {
-      if (destroyed) { fn(); return; }
-      unlistenError = fn;
-    });
-
-    listen<RuntimeDiagnostics>("runtime-diagnostics", (event) => {
-      setDiagnostics(event.payload);
-      setConnectionState(event.payload.connection_state);
-    }).then((fn) => {
-      if (destroyed) { fn(); return; }
-      unlistenDiagnostics = fn;
-    });
-
-    listen<boolean>("messages-synced", () => {
-      void invoke<GotifyMessage[]>("load_messages")
-        .then((cached) => setMessages((current) => mergeUiMessages(current, cached)))
-        .catch(() => {});
-    }).then((fn) => {
-      if (destroyed) { fn(); return; }
-      unlistenMessagesSynced = fn;
-    });
-
-    listen<GotifyMessage[]>("messages-updated", (event) => {
-      setMessages((current) => mergeUiMessages(current, event.payload));
-    }).then((fn) => {
-      if (destroyed) { fn(); return; }
-      unlistenMessagesUpdated = fn;
-    });
-
-    listen<number>("notifications-paused-until", (event) => {
-      setPauseUntil(event.payload);
-      if (event.payload === PAUSE_FOREVER_SENTINEL) {
-        setPauseMode("forever");
-      }
-    }).then((fn) => {
-      if (destroyed) { fn(); return; }
-      unlistenNotificationsPaused = fn;
-    });
-
-    listen<boolean>("notifications-resumed", () => {
-      setPauseUntil(null);
-      setPauseMode(null);
-    }).then((fn) => {
-      if (destroyed) { fn(); return; }
-      unlistenNotificationsResumed = fn;
-    });
-
-    listen<number | null>("notifications-pause-state", (event) => {
-      setPauseUntil(event.payload);
-    }).then((fn) => {
-      if (destroyed) { fn(); return; }
-      unlistenPauseState = fn;
-    });
-
-    listen<string | null>("notifications-pause-mode", (event) => {
-      setPauseMode(normalizePauseMode(event.payload));
-    }).then((fn) => {
-      if (destroyed) { fn(); return; }
-      unlistenPauseMode = fn;
-    });
-
-    const load = async () => {
+    const initialize = async () => {
       try {
-        const [settings, cachedMessages, runtime] = await Promise.all([
-          invoke<SettingsResponse>("load_settings"),
-          invoke<GotifyMessage[]>("load_messages"),
-          invoke<RuntimeDiagnostics>("get_runtime_diagnostics"),
-        ]);
+        const bootstrap = await invoke<BootstrapState>("bootstrap_state");
+        if (destroyed) return;
+        applyBootstrap(bootstrap);
 
-        setBaseUrl(settings.base_url ?? "");
-        setHasStoredToken(settings.has_token);
-        setMinPriority(settings.min_priority ?? 0);
-        const normalizedThresholds = normalizePriorityThresholds(settings.priority_thresholds);
-        setPriorityThresholds(normalizedThresholds);
-        setActivePriorityThresholds(normalizedThresholds);
-        const normalizedCacheLimit = settings.cache_limit ?? 100;
-        setCacheLimit(normalizedCacheLimit);
-        setActiveCacheLimit(normalizedCacheLimit);
-        setLaunchAtLogin(settings.launch_at_login ?? false);
-        setStartMinimizedToTray(settings.start_minimized_to_tray ?? false);
-        setPauseUntil(settings.pause_until ?? null);
-        setPauseMode(normalizePauseMode(settings.pause_mode));
-        setQuietStart(settings.quiet_hours_start == null ? "" : String(settings.quiet_hours_start));
-        setQuietEnd(settings.quiet_hours_end == null ? "" : String(settings.quiet_hours_end));
-        setMessages((current) => mergeUiMessages(current, cachedMessages));
-        setDiagnostics(runtime);
-        setConnectionState(runtime.connection_state);
+        const channel = new Channel<AppUpdate>((update) => {
+          if (destroyed) return;
+          handleAppUpdate(update);
+        });
+        updateChannelRef.current = channel;
+        await invoke("subscribe_app_updates", { channel });
       } catch (error) {
+        updateChannelRef.current = null;
         setFeedback({ kind: "error", message: String(error) });
       } finally {
-        setIsLoading(false);
+        if (!destroyed) {
+          setIsLoading(false);
+        }
       }
     };
 
-    void load();
+    void initialize();
 
     return () => {
-      // Setting destroyed=true before calling any unlisten ensures that any
-      // in-flight listen() promises that resolve after this point will also
-      // immediately release their subscription rather than storing a stale handle.
       destroyed = true;
-      if (unlistenConnection) unlistenConnection();
-      if (unlistenMessage) unlistenMessage();
       if (unlistenNotification) unlistenNotification();
       if (unlistenNotificationClicked) unlistenNotificationClicked();
-      if (unlistenError) unlistenError();
-      if (unlistenDiagnostics) unlistenDiagnostics();
-      if (unlistenMessagesSynced) unlistenMessagesSynced();
-      if (unlistenMessagesUpdated) unlistenMessagesUpdated();
-      if (unlistenNotificationsPaused) unlistenNotificationsPaused();
-      if (unlistenNotificationsResumed) unlistenNotificationsResumed();
-      if (unlistenPauseState) unlistenPauseState();
-      if (unlistenPauseMode) unlistenPauseMode();
+      updateChannelRef.current = null;
+      void invoke("unsubscribe_app_updates").catch(() => {});
     };
   }, []);
 
@@ -567,107 +580,24 @@ export function App() {
     };
   }, [testConnectionFlash]);
 
-  // Keep diagnostics fresh while the diagnostics panel is open. Some macOS/WebKit
-  // focus/throttle states can delay event delivery, so this lightweight poll keeps
-  // counters (like stream idle) accurate in real time when the user is actively
-  // viewing diagnostics.
   useEffect(() => {
-    if (drawerTab !== "diagnostics") return;
-    let disposed = false;
-
-    const refreshDiagnostics = async () => {
-      try {
-        const runtime = await invoke<RuntimeDiagnostics>("get_runtime_diagnostics");
-        if (disposed) return;
-        setDiagnostics(runtime);
-        setConnectionState(runtime.connection_state);
-      } catch {
-        // ignore transient invoke errors
-      }
-    };
-
-    void refreshDiagnostics();
-    const timer = window.setInterval(() => {
-      void refreshDiagnostics();
-    }, 1000);
-
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [drawerTab]);
-
-  // macOS WebKit throttles JavaScript callbacks (including Tauri event listeners)
-  // when a window is open but does not have keyboard focus. The message-received
-  // listener fires instantly when the window is active, but may be deferred when
-  // the window is backgrounded. A 5 s fallback poll ensures messages appear within
-  // one backend sync cycle even through that throttle, without hammering the IPC
-  // channel at 600 ms like the previous loop did.
-  useEffect(() => {
-    let disposed = false;
-    const syncMessages = async () => {
-      if (document.hidden || disposed) return;
-      try {
-        const cached = await invoke<GotifyMessage[]>("load_messages");
-        if (disposed) return;
-        setMessages((current) => mergeUiMessages(current, cached));
-      } catch {
-        // ignore transient invoke errors
-      }
-    };
-
-    void syncMessages();
-    const timer = window.setInterval(() => {
-      void syncMessages();
-    }, 5000);
-
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, []);
-
-  useEffect(() => {
-    const refreshMessages = async () => {
-      try {
-        const cached = await invoke<GotifyMessage[]>("load_messages");
-        setMessages((current) => mergeUiMessages(current, cached));
-      } catch {
-        // ignore transient invoke errors
-      }
-    };
-
-    const refreshPauseState = async () => {
-      try {
-        const pauseState = await invoke<PauseStateResponse>("get_pause_state");
-        applyPauseState(pauseState.pause_until ?? null, pauseState.pause_mode ?? null);
-      } catch {
-        // ignore transient invoke errors
-      }
-    };
-
     const triggerRecovery = async () => {
       const now = Date.now();
       if (now - lastRecoveryAttemptRef.current < 2000) return;
       lastRecoveryAttemptRef.current = now;
       try {
-        await invoke("recover_stream");
+        const snapshot = await invoke<DomainSnapshot<RuntimeDiagnostics>>("recover_stream");
+        applyRuntimeSnapshot(snapshot);
       } catch {
         // ignore recovery invoke failures
       }
     };
 
     const onOnline = () => void triggerRecovery();
-    const onFocus = () => {
-      void triggerRecovery();
-      void refreshMessages();
-      void refreshPauseState();
-    };
+    const onFocus = () => void triggerRecovery();
     const onVisibility = () => {
       if (!document.hidden) {
         void triggerRecovery();
-        void refreshMessages();
-        void refreshPauseState();
       }
     };
 
@@ -681,18 +611,6 @@ export function App() {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
-
-  useEffect(() => {
-    if (connectionState !== "Connected") return;
-    void invoke<GotifyMessage[]>("load_messages")
-      .then((cached) => setMessages((current) => mergeUiMessages(current, cached)))
-      .catch(() => {});
-  }, [connectionState]);
-
-  // Pause state is pushed by the backend via notifications-pause-state,
-  // notifications-pause-mode, notifications-paused-until, and notifications-resumed
-  // events, and is refreshed on focus/visible by the recovery effect above.
-  // No polling loop needed.
 
   const onSave = async (event: FormEvent) => {
     event.preventDefault();
@@ -717,7 +635,7 @@ export function App() {
       const quietHoursEnd = parsedQuietEnd;
       const normalizedThresholds = normalizePriorityThresholds(priorityThresholds);
 
-      await invoke("save_settings", {
+      const settingsSnapshot = await invoke<DomainSnapshot<SettingsResponse>>("save_settings", {
         baseUrl,
         token,
         minPriority,
@@ -729,28 +647,17 @@ export function App() {
         quietHoursStart,
         quietHoursEnd,
       });
-
-      const refreshed = await invoke<SettingsResponse>("load_settings");
-      setHasStoredToken(refreshed.has_token);
-      setMinPriority(refreshed.min_priority ?? 0);
-      const refreshedThresholds = normalizePriorityThresholds(refreshed.priority_thresholds);
-      setPriorityThresholds(refreshedThresholds);
-      setActivePriorityThresholds(refreshedThresholds);
-      const refreshedCacheLimit = refreshed.cache_limit ?? 100;
-      setCacheLimit(refreshedCacheLimit);
-      setActiveCacheLimit(refreshedCacheLimit);
-      setLaunchAtLogin(refreshed.launch_at_login ?? false);
-      setStartMinimizedToTray(refreshed.start_minimized_to_tray ?? false);
-      setPauseUntil(refreshed.pause_until ?? null);
-      setPauseMode(normalizePauseMode(refreshed.pause_mode));
-      setQuietStart(refreshed.quiet_hours_start == null ? "" : String(refreshed.quiet_hours_start));
-      setQuietEnd(refreshed.quiet_hours_end == null ? "" : String(refreshed.quiet_hours_end));
+      applySettingsSnapshot(settingsSnapshot);
       setActiveThemePreference(themePreference);
       setToken("");
       setFeedback({ kind: "ok", message: "Settings saved. Reconnecting..." });
       setDrawerTab(null);
-      // Restart stream with new credentials — fire-and-forget; result reported via events
-      void invoke("restart_stream").catch(() => {});
+      // Restart stream with new credentials; connection/runtime updates flow through app updates.
+      void invoke<DomainSnapshot<RuntimeDiagnostics>>("restart_stream")
+        .then((snapshot) => {
+          applyRuntimeSnapshot(snapshot);
+        })
+        .catch(() => {});
     } catch (error) {
       setFeedback({ kind: "error", message: String(error) });
     } finally {
@@ -782,28 +689,22 @@ export function App() {
   const onPause = async (minutes: number) => {
     setPauseMenuOpen(false);
     try {
-      await invoke("pause_notifications", { minutes });
-      // Pause state is updated by backend-emitted notifications-pause-* events.
+      const snapshot = await invoke<DomainSnapshot<PauseStateData>>("set_pause", {
+        input: { minutes },
+      });
+      applyPauseSnapshot(snapshot);
     } catch (error) {
       setFeedback({ kind: "error", message: String(error) });
     }
   };
 
-  const onPauseUntilTomorrow = async () => {
-    const now = new Date();
-    const tomorrow = new Date(now);
-    tomorrow.setDate(now.getDate() + 1);
-    tomorrow.setHours(0, 0, 0, 0);
-    const ms = Math.max(60_000, tomorrow.getTime() - now.getTime());
-    const minutes = Math.ceil(ms / 60_000);
-    await onPause(minutes);
-  };
-
   const onPauseForever = async () => {
     setPauseMenuOpen(false);
     try {
-      await invoke("pause_notifications_forever");
-      // Pause state is updated by backend-emitted notifications-pause-* events.
+      const snapshot = await invoke<DomainSnapshot<PauseStateData>>("set_pause", {
+        input: { forever: true },
+      });
+      applyPauseSnapshot(snapshot);
     } catch (error) {
       setFeedback({ kind: "error", message: String(error) });
     }
@@ -812,8 +713,8 @@ export function App() {
   const onResumeNotifications = async () => {
     setPauseMenuOpen(false);
     try {
-      await invoke("resume_notifications");
-      // Pause state is cleared by backend-emitted notifications-resumed event.
+      const snapshot = await invoke<DomainSnapshot<PauseStateData>>("resume_pause");
+      applyPauseSnapshot(snapshot);
     } catch (error) {
       setFeedback({ kind: "error", message: String(error) });
     }
@@ -834,11 +735,16 @@ export function App() {
     }, ANIM_MS);
 
     try {
-      await invoke("delete_message", { messageId });
+      const snapshot = await invoke<DomainSnapshot<GotifyMessage[]>>("delete_message", { messageId });
+      applyMessagesReplaceSnapshot(snapshot);
     } catch (error) {
       // Server rejected the delete — restore the message
       if (snapshot) {
-        setMessages((current) => mergeUiMessages(current, [snapshot]));
+        setMessages((current) => {
+          const restored = toUiMessage(snapshot);
+          const withoutExisting = current.filter((item) => item.id !== restored.id);
+          return [restored, ...withoutExisting].slice(0, cacheLimitRef.current);
+        });
       }
       setDeletingMessageIds((current) => { const next = { ...current }; delete next[messageId]; return next; });
       setFeedback({ kind: "error", message: String(error) });
@@ -1039,9 +945,6 @@ export function App() {
                       <button type="button" role="menuitem" onClick={() => void onPause(60)}>
                         {pauseIsActive && pauseMode === "1h" ? "Pause 1 hour ✓" : "Pause 1 hour"}
                       </button>
-                      <button type="button" role="menuitem" onClick={() => void onPauseUntilTomorrow()}>
-                        {pauseIsActive && pauseMode === "custom" ? "Pause until tomorrow ✓" : "Pause until tomorrow"}
-                      </button>
                       <button type="button" role="menuitem" onClick={() => void onPauseForever()}>
                         {pauseIsForever ? "Pause forever ✓" : "Pause forever"}
                       </button>
@@ -1218,7 +1121,11 @@ export function App() {
                 messageCount={messages.length}
                 streamIdleSeconds={streamIdleSeconds}
                 onForceReconnect={() => {
-                  void invoke("restart_stream").catch(() => {});
+                  void invoke<DomainSnapshot<RuntimeDiagnostics>>("restart_stream")
+                    .then((snapshot) => {
+                      applyRuntimeSnapshot(snapshot);
+                    })
+                    .catch(() => {});
                 }}
               />
             ) : null}

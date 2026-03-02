@@ -59,6 +59,18 @@ The Rust backend is split by responsibility under `src-tauri/src/`:
 - `consts.rs` - shared backend constants
 - `model.rs` - shared backend structs/types
 
+## Frontend/backend contract
+
+The app-wide interaction contract is documented in:
+
+- [`docs/frontend-backend-standard.md`](docs/frontend-backend-standard.md)
+
+Static contract enforcement:
+
+```bash
+npm run standard:check
+```
+
 ## Build for production
 
 Create a release build and installable bundles:

@@ -44,7 +44,10 @@ pub(crate) fn maybe_notify_message(app: &AppHandle, message: &CachedMessage) {
         return;
     }
     if is_quiet_hours(settings.quiet_hours_start, settings.quiet_hours_end) {
-        debug_log(&format!("notify skipped id={} reason=quiet-hours", message.id));
+        debug_log(&format!(
+            "notify skipped id={} reason=quiet-hours",
+            message.id
+        ));
         return;
     }
 
@@ -52,7 +55,8 @@ pub(crate) fn maybe_notify_message(app: &AppHandle, message: &CachedMessage) {
         "notify dispatch id={} app_id={} priority={}",
         message.id, message.app_id, message.priority
     ));
-    let _ = app.emit("notification-message", message);
+    let _ = app.emit_to("main", "notification-message", message);
+    let _ = app.emit_to("quick", "notification-message", message);
     #[cfg(target_os = "macos")]
     send_macos_notification(app.clone(), message.clone());
 }
@@ -125,10 +129,8 @@ pub(crate) fn send_macos_notification(app: AppHandle, message: CachedMessage) {
             Ok(NotificationResponse::Click) | Ok(NotificationResponse::ActionButton(_)) => {
                 debug_log(&format!("mac notify click id={message_id}"));
                 ui_shell::show_main_window(&app);
-                let _ = app.emit("notification-clicked", message.clone());
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.emit("notification-clicked", message.clone());
-                }
+                let _ = app.emit_to("main", "notification-clicked", message.clone());
+                let _ = app.emit_to("quick", "notification-clicked", message.clone());
             }
             Ok(response) => {
                 debug_log(&format!(

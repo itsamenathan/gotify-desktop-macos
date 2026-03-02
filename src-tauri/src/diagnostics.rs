@@ -1,5 +1,5 @@
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::{debug_log, unix_now_secs, AppState};
 
@@ -43,13 +43,10 @@ pub(crate) fn snapshot_runtime(app: &AppHandle) -> Result<RuntimeDiagnostics, St
     })
 }
 
-pub(crate) fn emit_runtime_diagnostics(app: &AppHandle) {
+pub(crate) fn publish_runtime_snapshot(app: &AppHandle) {
     match snapshot_runtime(app) {
         Ok(diag) => {
-            let _ = app.emit("runtime-diagnostics", diag.clone());
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.emit("runtime-diagnostics", diag);
-            }
+            let _ = crate::contract::publish_runtime_update(app, diag);
         }
         Err(err) => {
             debug_log(&format!("failed to snapshot runtime: {err}"));
@@ -63,5 +60,5 @@ pub(crate) fn mark_stream_activity(app: &AppHandle, at: u64, _source: &str) {
             runtime.last_stream_event_at = Some(at);
         }
     }
-    emit_runtime_diagnostics(app);
+    publish_runtime_snapshot(app);
 }

@@ -146,10 +146,7 @@ pub(crate) fn emit_delete_debug(
         detail: truncate_message(detail, 800),
         status,
     };
-    let _ = app.emit("delete-message-debug", event.clone());
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.emit("delete-message-debug", event);
-    }
+    let _ = app.emit_to("main", "delete-message-debug", event);
 }
 
 pub(crate) fn get_settings_path() -> Result<&'static PathBuf, String> {

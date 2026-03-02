@@ -1,7 +1,7 @@
-use std::{collections::HashMap, fs, path::PathBuf, thread};
+use std::{collections::HashMap, fs, path::PathBuf};
 
 use base64::Engine as _;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::{
     debug_log, messages_file, truncate_message, unix_now_secs, AppState, ApplicationMeta,
@@ -241,22 +241,14 @@ pub(crate) fn cache_and_emit_message(
     }
 
     let cache_snapshot = messages_guard.clone();
-    let cache_snapshot_for_persist = cache_snapshot.clone();
-    let cache_path = messages_file(app)?;
     drop(messages_guard);
-
-    thread::spawn(move || {
-        if let Err(error) = persist_messages_to_path(&cache_path, &cache_snapshot_for_persist) {
-            debug_log(&format!("failed to persist message cache: {error}"));
-        }
-    });
+    persist_messages_snapshot(app, &cache_snapshot)?;
 
     debug_log(&format!(
         "message received id={} title={}",
         message.id,
         truncate_message(&message.title, 60)
     ));
-    debug_log(&format!("message-received emit id={}", message.id));
     let event_now = unix_now_secs();
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(mut runtime) = state.runtime.lock() {
@@ -265,10 +257,8 @@ pub(crate) fn cache_and_emit_message(
             runtime.last_stream_event_at = Some(event_now);
         }
     }
-    let _ = app.emit("message-received", message.clone());
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.emit("message-received", message.clone());
-    }
+    let _ = crate::contract::publish_message_upsert(app, message.clone());
+    crate::diagnostics::publish_runtime_snapshot(app);
     if allow_notification && !existed {
         crate::notifications::maybe_notify_message(app, &message);
     }
@@ -308,12 +298,8 @@ pub(crate) fn replace_message_cache(
         *messages_guard = normalized.clone();
     }
 
-    persist_current_cache_async(app)?;
-    let _ = app.emit("messages-synced", true);
-    let _ = app.emit("messages-updated", normalized.clone());
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.emit("messages-updated", normalized.clone());
-    }
+    persist_messages_snapshot(app, &normalized)?;
+    let _ = crate::contract::publish_messages_replace(app, normalized);
     Ok(())
 }
 
@@ -329,29 +315,19 @@ pub(crate) fn remove_message_from_cache(app: &AppHandle, message_id: i64) -> Res
         updated_snapshot = messages_guard.clone();
     }
 
-    persist_current_cache_async(app)?;
-    let _ = app.emit("messages-synced", true);
-    let _ = app.emit("messages-updated", updated_snapshot.clone());
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.emit("messages-updated", updated_snapshot.clone());
-    }
+    persist_messages_snapshot(app, &updated_snapshot)?;
+    let _ = crate::contract::publish_message_remove(app, message_id);
     Ok(())
 }
 
-pub(crate) fn persist_current_cache_async(app: &AppHandle) -> Result<(), String> {
+fn persist_messages_snapshot(app: &AppHandle, snapshot: &[CachedMessage]) -> Result<(), String> {
     let app_state = app.state::<AppState>();
-    let cache_snapshot = app_state
-        .messages
+    let _persist_guard = app_state
+        .message_persist_lock
         .lock()
-        .map_err(|_| "Message cache lock poisoned".to_string())?
-        .clone();
+        .map_err(|_| "Message persist lock poisoned".to_string())?;
     let cache_path = messages_file(app)?;
-    thread::spawn(move || {
-        if let Err(error) = persist_messages_to_path(&cache_path, &cache_snapshot) {
-            debug_log(&format!("failed to persist message cache: {error}"));
-        }
-    });
-    Ok(())
+    persist_messages_to_path(&cache_path, snapshot)
 }
 
 pub(crate) fn load_messages_from_disk(app: &AppHandle) -> Result<Vec<CachedMessage>, String> {

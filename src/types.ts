@@ -1,5 +1,11 @@
 export type ConnectionState = "Connected" | "Disconnected" | "Connecting" | "Backoff";
 
+export type DomainSnapshot<T> = {
+  revision: number;
+  updated_at_ms: number;
+  data: T;
+};
+
 export type SettingsResponse = {
   base_url: string;
   has_token: boolean;
@@ -16,9 +22,11 @@ export type SettingsResponse = {
   quiet_hours_end: number | null;
 };
 
-export type PauseStateResponse = {
+export type PauseStateData = {
   pause_until: number | null;
   pause_mode: string | null;
+  is_active: boolean;
+  remaining_sec: number;
 };
 
 export type GotifyMessage = {
@@ -51,6 +59,36 @@ export type RuntimeDiagnostics = {
   backoff_seconds: number;
   reconnect_attempts: number;
 };
+
+export type ConnectionStateData = {
+  state: ConnectionState;
+};
+
+export type MessageRemovedData = {
+  message_id: number;
+};
+
+export type StreamErrorData = {
+  message: string;
+};
+
+export type BootstrapState = {
+  settings: DomainSnapshot<SettingsResponse>;
+  pause: DomainSnapshot<PauseStateData>;
+  messages: DomainSnapshot<GotifyMessage[]>;
+  connection: DomainSnapshot<ConnectionStateData>;
+  runtime: DomainSnapshot<RuntimeDiagnostics>;
+};
+
+export type AppUpdate =
+  | { type: "settings.updated"; payload: DomainSnapshot<SettingsResponse> }
+  | { type: "pause.updated"; payload: DomainSnapshot<PauseStateData> }
+  | { type: "messages.replace"; payload: DomainSnapshot<GotifyMessage[]> }
+  | { type: "messages.upsert"; payload: DomainSnapshot<GotifyMessage> }
+  | { type: "messages.remove"; payload: DomainSnapshot<MessageRemovedData> }
+  | { type: "connection.updated"; payload: DomainSnapshot<ConnectionStateData> }
+  | { type: "runtime.updated"; payload: DomainSnapshot<RuntimeDiagnostics> }
+  | { type: "stream.error"; payload: DomainSnapshot<StreamErrorData> };
 
 export type AppGroup = {
   key: string;

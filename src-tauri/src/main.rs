@@ -9,9 +9,10 @@ use std::{
 };
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl};
+use tauri::{AppHandle, Manager, Webview, WebviewUrl};
 
 mod consts;
+mod contract;
 mod diagnostics;
 use diagnostics::RuntimeDiagnostics;
 mod core;
@@ -31,13 +32,12 @@ pub(crate) use core::{
 };
 pub(crate) use model::{
     AppState, ApplicationMeta, CachedMessage, GotifyApplicationWire, GotifyMessageListWire,
-    GotifyMessageWire, TrayPauseMenuState, UrlPreview,
+    GotifyMessageWire, RevisionKey, TrayPauseMenuState, UrlPreview,
 };
 use settings::{
-    get_pause_state as get_pause_state_impl, load_settings as load_settings_impl, load_token,
-    normalize_base_url, read_settings, save_settings as save_settings_impl,
-    test_connection as test_connection_impl, PauseStateResponse, PriorityColorMode,
-    PriorityGradient, PriorityThreshold, SettingsResponse,
+    load_settings as load_settings_impl, load_token, normalize_base_url, read_settings,
+    save_settings as save_settings_impl, test_connection as test_connection_impl,
+    PriorityColorMode, PriorityGradient, PriorityThreshold, SettingsResponse,
 };
 
 /// Resolved at startup; must be set before any `load_settings` / `save_settings` call.
@@ -64,8 +64,8 @@ fn save_settings(
     start_minimized_to_tray: Option<bool>,
     quiet_hours_start: Option<u8>,
     quiet_hours_end: Option<u8>,
-) -> Result<(), String> {
-    save_settings_impl(
+) -> Result<contract::DomainSnapshot<SettingsResponse>, String> {
+    let settings = save_settings_impl(
         &app,
         base_url,
         token,
@@ -78,28 +78,13 @@ fn save_settings(
         start_minimized_to_tray,
         quiet_hours_start,
         quiet_hours_end,
-    )
+    )?;
+    Ok(contract::publish_settings_update(&app, settings))
 }
 
 #[tauri::command]
 async fn test_connection(base_url: String, token: Option<String>) -> Result<String, String> {
     test_connection_impl(base_url, token).await
-}
-
-#[tauri::command]
-fn load_messages(app: AppHandle) -> Result<Vec<CachedMessage>, String> {
-    let state = app.state::<AppState>();
-    let messages = state
-        .messages
-        .lock()
-        .map_err(|_| "Message cache lock poisoned".to_string())?
-        .clone();
-    Ok(messages)
-}
-
-#[tauri::command]
-fn get_pause_state(app: AppHandle) -> Result<PauseStateResponse, String> {
-    get_pause_state_impl(&app)
 }
 
 #[tauri::command]
@@ -143,7 +128,7 @@ async fn delete_message(
     app: AppHandle,
     messageId: Option<i64>,
     message_id: Option<i64>,
-) -> Result<(), String> {
+) -> Result<contract::DomainSnapshot<Vec<CachedMessage>>, String> {
     let message_id = message_id
         .or(messageId)
         .ok_or_else(|| "Missing message id".to_string())?;
@@ -255,52 +240,110 @@ async fn delete_message(
             }
         }
     });
-    Ok(())
+    let snapshot_messages = app
+        .state::<AppState>()
+        .messages
+        .lock()
+        .map_err(|_| "Message cache lock poisoned".to_string())?
+        .clone();
+    let revision = contract::current_revision(&app, RevisionKey::Messages);
+    Ok(contract::snapshot_at_revision(revision, snapshot_messages))
 }
 
 #[tauri::command]
-async fn start_stream(app: AppHandle, token: Option<String>) -> Result<(), String> {
-    stream::start_stream(app, token)
+fn bootstrap_state(app: AppHandle) -> Result<contract::BootstrapState, String> {
+    let settings = load_settings_impl(&app)?;
+    let pause = pause::get_pause_state_data(&app)?;
+    let messages = app
+        .state::<AppState>()
+        .messages
+        .lock()
+        .map_err(|_| "Message cache lock poisoned".to_string())?
+        .clone();
+    let runtime = stream::get_runtime_diagnostics(app.clone())?;
+    let connection = contract::ConnectionStateData {
+        state: runtime.connection_state.clone(),
+    };
+
+    Ok(contract::BootstrapState {
+        settings: contract::snapshot_at_revision(
+            contract::current_revision(&app, RevisionKey::Settings),
+            settings,
+        ),
+        pause: contract::snapshot_at_revision(
+            contract::current_revision(&app, RevisionKey::Pause),
+            pause,
+        ),
+        messages: contract::snapshot_at_revision(
+            contract::current_revision(&app, RevisionKey::Messages),
+            messages,
+        ),
+        connection: contract::snapshot_at_revision(
+            contract::current_revision(&app, RevisionKey::Connection),
+            connection,
+        ),
+        runtime: contract::snapshot_at_revision(
+            contract::current_revision(&app, RevisionKey::Runtime),
+            runtime,
+        ),
+    })
 }
 
 #[tauri::command]
-fn stop_stream(app: AppHandle) -> Result<(), String> {
-    stream::stop_stream(app)
+fn subscribe_app_updates(
+    app: AppHandle,
+    webview: Webview,
+    channel: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<(), String> {
+    contract::register_app_update_channel(&app, webview.label(), channel)
 }
 
 #[tauri::command]
-fn get_connection_state(app: AppHandle) -> Result<String, String> {
-    stream::get_connection_state(app)
+fn unsubscribe_app_updates(app: AppHandle, webview: Webview) -> Result<(), String> {
+    contract::unregister_app_update_channel(&app, webview.label())
 }
 
 #[tauri::command]
-fn get_runtime_diagnostics(app: AppHandle) -> Result<RuntimeDiagnostics, String> {
-    stream::get_runtime_diagnostics(app)
+fn recover_stream(app: AppHandle) -> Result<contract::DomainSnapshot<RuntimeDiagnostics>, String> {
+    stream::recover_stream(app.clone())?;
+    let runtime = stream::get_runtime_diagnostics(app.clone())?;
+    Ok(contract::snapshot_at_revision(
+        contract::current_revision(&app, RevisionKey::Runtime),
+        runtime,
+    ))
 }
 
 #[tauri::command]
-fn recover_stream(app: AppHandle) -> Result<(), String> {
-    stream::recover_stream(app)
+fn restart_stream(app: AppHandle) -> Result<contract::DomainSnapshot<RuntimeDiagnostics>, String> {
+    stream::restart_stream(app.clone())?;
+    let runtime = stream::get_runtime_diagnostics(app.clone())?;
+    Ok(contract::snapshot_at_revision(
+        contract::current_revision(&app, RevisionKey::Runtime),
+        runtime,
+    ))
 }
 
 #[tauri::command]
-fn restart_stream(app: AppHandle) -> Result<(), String> {
-    stream::restart_stream(app)
+fn set_pause(
+    app: AppHandle,
+    input: pause::SetPauseInput,
+) -> Result<contract::DomainSnapshot<contract::PauseStateData>, String> {
+    let pause_state = pause::set_pause(app.clone(), input)?;
+    Ok(contract::snapshot_at_revision(
+        contract::current_revision(&app, RevisionKey::Pause),
+        pause_state,
+    ))
 }
 
 #[tauri::command]
-fn pause_notifications(app: AppHandle, minutes: u64) -> Result<(), String> {
-    pause::pause_notifications(app, minutes)
-}
-
-#[tauri::command]
-fn pause_notifications_forever(app: AppHandle) -> Result<(), String> {
-    pause::pause_notifications_forever(app)
-}
-
-#[tauri::command]
-fn resume_notifications(app: AppHandle) -> Result<(), String> {
-    pause::resume_notifications(app)
+fn resume_pause(
+    app: AppHandle,
+) -> Result<contract::DomainSnapshot<contract::PauseStateData>, String> {
+    let pause_state = pause::resume_pause(app.clone())?;
+    Ok(contract::snapshot_at_revision(
+        contract::current_revision(&app, RevisionKey::Pause),
+        pause_state,
+    ))
 }
 
 #[tauri::command]
@@ -413,22 +456,18 @@ fn main() {
     tauri::Builder::default()
         .manage(AppState::new(Vec::new()))
         .invoke_handler(tauri::generate_handler![
+            bootstrap_state,
+            subscribe_app_updates,
+            unsubscribe_app_updates,
             load_settings,
             save_settings,
             test_connection,
-            load_messages,
-            get_pause_state,
             open_external_url,
             delete_message,
-            start_stream,
-            stop_stream,
-            get_connection_state,
-            get_runtime_diagnostics,
             recover_stream,
             restart_stream,
-            pause_notifications,
-            pause_notifications_forever,
-            resume_notifications,
+            set_pause,
+            resume_pause,
             fetch_url_preview
         ])
         .setup(|app| {
@@ -539,33 +578,57 @@ fn main() {
                         ui_shell::show_main_window(app);
                     }
                     "pause_15m" => {
-                        if let Err(error) = pause_notifications(app.clone(), 15) {
-                            let _ = app.emit(
-                                "connection-error",
+                        if let Err(error) = pause::set_pause(
+                            app.clone(),
+                            pause::SetPauseInput {
+                                minutes: Some(15),
+                                until: None,
+                                mode: None,
+                                forever: None,
+                            },
+                        ) {
+                            let _ = contract::publish_stream_error(
+                                &app,
                                 format!("Failed to pause notifications: {error}"),
                             );
                         }
                     }
                     "pause_1h" => {
-                        if let Err(error) = pause_notifications(app.clone(), 60) {
-                            let _ = app.emit(
-                                "connection-error",
+                        if let Err(error) = pause::set_pause(
+                            app.clone(),
+                            pause::SetPauseInput {
+                                minutes: Some(60),
+                                until: None,
+                                mode: None,
+                                forever: None,
+                            },
+                        ) {
+                            let _ = contract::publish_stream_error(
+                                &app,
                                 format!("Failed to pause notifications: {error}"),
                             );
                         }
                     }
                     "pause_forever" => {
-                        if let Err(error) = pause_notifications_forever(app.clone()) {
-                            let _ = app.emit(
-                                "connection-error",
+                        if let Err(error) = pause::set_pause(
+                            app.clone(),
+                            pause::SetPauseInput {
+                                minutes: None,
+                                until: None,
+                                mode: None,
+                                forever: Some(true),
+                            },
+                        ) {
+                            let _ = contract::publish_stream_error(
+                                &app,
                                 format!("Failed to pause notifications: {error}"),
                             );
                         }
                     }
                     "resume_notifications" => {
-                        if let Err(error) = resume_notifications(app.clone()) {
-                            let _ = app.emit(
-                                "connection-error",
+                        if let Err(error) = pause::resume_pause(app.clone()) {
+                            let _ = contract::publish_stream_error(
+                                &app,
                                 format!("Failed to resume notifications: {error}"),
                             );
                         }
@@ -594,7 +657,11 @@ fn main() {
             match stream::start_stream(app.handle().clone(), None) {
                 Ok(_) => {}
                 Err(error) => {
-                    let _ = app.emit("connection-error", format!("Auto-connect failed: {error}"));
+                    let handle = app.handle().clone();
+                    let _ = contract::publish_stream_error(
+                        &handle,
+                        format!("Auto-connect failed: {error}"),
+                    );
                 }
             }
 

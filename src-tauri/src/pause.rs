@@ -1,11 +1,21 @@
+use serde::Deserialize;
 use tauri::menu::MenuItem;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::{
-    debug_log, settings::read_settings, settings::save_non_secret_settings, unix_now_secs,
-    AppState, TrayPauseMenuState, PAUSE_FOREVER_SENTINEL, PAUSE_MODE_15M, PAUSE_MODE_1H,
-    PAUSE_MODE_CUSTOM, PAUSE_MODE_FOREVER,
+    contract::PauseStateData, settings::read_settings, settings::save_non_secret_settings,
+    unix_now_secs, AppState, TrayPauseMenuState, PAUSE_FOREVER_SENTINEL, PAUSE_MODE_15M,
+    PAUSE_MODE_1H, PAUSE_MODE_CUSTOM, PAUSE_MODE_FOREVER,
 };
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct SetPauseInput {
+    pub(crate) minutes: Option<u64>,
+    pub(crate) until: Option<u64>,
+    pub(crate) mode: Option<String>,
+    pub(crate) forever: Option<bool>,
+}
 
 pub(crate) struct PauseMenuItems {
     pub(crate) status_item: MenuItem<tauri::Wry>,
@@ -63,40 +73,78 @@ pub(crate) fn install_pause_menu_state(
     apply_pause_state_to_tray(app, pause_until, pause_mode);
 }
 
-pub(crate) fn pause_notifications(app: AppHandle, minutes: u64) -> Result<(), String> {
-    if minutes == 0 {
-        return Err("Pause duration must be greater than 0 minutes".to_string());
+pub(crate) fn set_pause(app: AppHandle, input: SetPauseInput) -> Result<PauseStateData, String> {
+    if input.forever.unwrap_or(false) {
+        return set_notification_pause_until(
+            &app,
+            Some(PAUSE_FOREVER_SENTINEL),
+            Some(PAUSE_MODE_FOREVER),
+        );
     }
-    let until = unix_now_secs().saturating_add(minutes.saturating_mul(60));
-    let mode = match minutes {
-        15 => PAUSE_MODE_15M,
-        60 => PAUSE_MODE_1H,
-        _ => PAUSE_MODE_CUSTOM,
-    };
-    set_notification_pause_until(&app, Some(until), Some(mode))
+
+    if let Some(until) = input.until {
+        if until == PAUSE_FOREVER_SENTINEL {
+            return set_notification_pause_until(
+                &app,
+                Some(PAUSE_FOREVER_SENTINEL),
+                Some(PAUSE_MODE_FOREVER),
+            );
+        }
+        if until <= unix_now_secs() {
+            return Err("Pause 'until' must be in the future".to_string());
+        }
+        let mode = input.mode.unwrap_or_else(|| PAUSE_MODE_CUSTOM.to_string());
+        return set_notification_pause_until(&app, Some(until), Some(&mode));
+    }
+
+    if let Some(minutes) = input.minutes {
+        if minutes == 0 {
+            return Err("Pause duration must be greater than 0 minutes".to_string());
+        }
+        let until = unix_now_secs().saturating_add(minutes.saturating_mul(60));
+        let mode = match minutes {
+            15 => PAUSE_MODE_15M,
+            60 => PAUSE_MODE_1H,
+            _ => PAUSE_MODE_CUSTOM,
+        };
+        return set_notification_pause_until(&app, Some(until), Some(mode));
+    }
+
+    Err("Invalid pause input. Provide minutes, until, or forever=true".to_string())
 }
 
-pub(crate) fn pause_notifications_forever(app: AppHandle) -> Result<(), String> {
-    set_notification_pause_until(&app, Some(PAUSE_FOREVER_SENTINEL), Some(PAUSE_MODE_FOREVER))
-}
-
-pub(crate) fn resume_notifications(app: AppHandle) -> Result<(), String> {
+pub(crate) fn resume_pause(app: AppHandle) -> Result<PauseStateData, String> {
     set_notification_pause_until(&app, None, None)
+}
+
+pub(crate) fn get_pause_state_data(app: &AppHandle) -> Result<PauseStateData, String> {
+    let settings = read_settings(app)?;
+    Ok(pause_state_from_fields(
+        settings.pause_until,
+        settings.pause_mode.as_deref(),
+    ))
 }
 
 pub(crate) fn set_notification_pause_until(
     app: &AppHandle,
     pause_until: Option<u64>,
     pause_mode: Option<&str>,
-) -> Result<(), String> {
+) -> Result<PauseStateData, String> {
+    let app_state = app.state::<AppState>();
+    let _settings_guard = app_state
+        .settings_lock
+        .lock()
+        .map_err(|_| "Settings lock poisoned".to_string())?;
     let mut settings = read_settings(app)?;
     settings.pause_until = pause_until;
     settings.pause_mode = pause_mode.map(|mode| mode.to_string());
     save_non_secret_settings(app, &settings)?;
-    apply_pause_state_to_tray(app, pause_until, settings.pause_mode.as_deref());
-    emit_pause_state_events(app, pause_until, settings.pause_mode.as_deref());
 
-    Ok(())
+    let pause_state = pause_state_from_fields(settings.pause_until, settings.pause_mode.as_deref());
+    apply_pause_state_to_tray(app, settings.pause_until, settings.pause_mode.as_deref());
+    let _ = crate::contract::publish_pause_update(app, pause_state.clone());
+
+    Ok(pause_state)
 }
 
 pub(crate) fn refresh_pause_state_from_settings(app: &AppHandle) {
@@ -113,6 +161,30 @@ pub(crate) fn refresh_pause_state_from_settings(app: &AppHandle) {
     }
 
     apply_pause_state_to_tray(app, settings.pause_until, settings.pause_mode.as_deref());
+}
+
+fn pause_state_from_fields(pause_until: Option<u64>, pause_mode: Option<&str>) -> PauseStateData {
+    let now = unix_now_secs();
+    match pause_until {
+        Some(PAUSE_FOREVER_SENTINEL) => PauseStateData {
+            pause_until: Some(PAUSE_FOREVER_SENTINEL),
+            pause_mode: Some(PAUSE_MODE_FOREVER.to_string()),
+            is_active: true,
+            remaining_sec: 0,
+        },
+        Some(until) if until > now => PauseStateData {
+            pause_until: Some(until),
+            pause_mode: pause_mode.map(|mode| mode.to_string()),
+            is_active: true,
+            remaining_sec: until.saturating_sub(now),
+        },
+        _ => PauseStateData {
+            pause_until: None,
+            pause_mode: None,
+            is_active: false,
+            remaining_sec: 0,
+        },
+    }
 }
 
 fn is_pause_active(pause_until: Option<u64>) -> bool {
@@ -191,46 +263,4 @@ fn apply_pause_state_to_tray(app: &AppHandle, pause_until: Option<u64>, pause_mo
         });
     let _ = handles.pause_15m_item.set_enabled(true);
     let _ = handles.pause_1h_item.set_enabled(true);
-}
-
-fn emit_pause_state_events(app: &AppHandle, pause_until: Option<u64>, pause_mode: Option<&str>) {
-    let pause_mode_payload = pause_mode.map(|mode| mode.to_string());
-
-    if let Err(error) = app.emit("notifications-pause-state", pause_until) {
-        debug_log(&format!(
-            "failed to emit notifications-pause-state: {error}"
-        ));
-    }
-    if let Err(error) = app.emit("notifications-pause-mode", pause_mode_payload.clone()) {
-        debug_log(&format!("failed to emit notifications-pause-mode: {error}"));
-    }
-    match pause_until {
-        Some(until) => {
-            if let Err(error) = app.emit("notifications-paused-until", until) {
-                debug_log(&format!(
-                    "failed to emit notifications-paused-until: {error}"
-                ));
-            }
-        }
-        None => {
-            if let Err(error) = app.emit("notifications-resumed", true) {
-                debug_log(&format!("failed to emit notifications-resumed: {error}"));
-            }
-        }
-    }
-
-    for label in ["main", "quick"] {
-        if let Some(window) = app.get_webview_window(label) {
-            let _ = window.emit("notifications-pause-state", pause_until);
-            let _ = window.emit("notifications-pause-mode", pause_mode_payload.clone());
-            match pause_until {
-                Some(until) => {
-                    let _ = window.emit("notifications-paused-until", until);
-                }
-                None => {
-                    let _ = window.emit("notifications-resumed", true);
-                }
-            }
-        }
-    }
 }

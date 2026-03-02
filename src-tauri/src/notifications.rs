@@ -3,12 +3,13 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::atomic::{AtomicUsize, Ordering},
     thread,
 };
 
 use chrono::Timelike;
 #[cfg(target_os = "macos")]
-use mac_notification_sys::{MainButton, Notification, NotificationResponse};
+use mac_notification_sys::{Notification, NotificationResponse};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{
@@ -16,6 +17,9 @@ use crate::{
     unix_now_secs, AppState, ApplicationMeta, CachedMessage, APP_ICON_MAX_BYTES,
     PAUSE_FOREVER_SENTINEL,
 };
+
+#[cfg(target_os = "macos")]
+static IN_FLIGHT_NOTIFICATION_TASKS: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) fn maybe_notify_message(app: &AppHandle, message: &CachedMessage) {
     let settings = match read_settings(app) {
@@ -33,12 +37,21 @@ pub(crate) fn maybe_notify_message(app: &AppHandle, message: &CachedMessage) {
     }
 
     if message.priority < settings.min_priority {
+        debug_log(&format!(
+            "notify skipped id={} reason=priority threshold={} current={}",
+            message.id, settings.min_priority, message.priority
+        ));
         return;
     }
     if is_quiet_hours(settings.quiet_hours_start, settings.quiet_hours_end) {
+        debug_log(&format!("notify skipped id={} reason=quiet-hours", message.id));
         return;
     }
 
+    debug_log(&format!(
+        "notify dispatch id={} app_id={} priority={}",
+        message.id, message.app_id, message.priority
+    ));
     let _ = app.emit("notification-message", message);
     #[cfg(target_os = "macos")]
     send_macos_notification(app.clone(), message.clone());
@@ -65,6 +78,14 @@ pub(crate) fn is_quiet_hours(start: Option<u8>, end: Option<u8>) -> bool {
 #[cfg(target_os = "macos")]
 pub(crate) fn send_macos_notification(app: AppHandle, message: CachedMessage) {
     thread::spawn(move || {
+        let message_id = message.id;
+        let in_flight = IN_FLIGHT_NOTIFICATION_TASKS.fetch_add(1, Ordering::SeqCst) + 1;
+        let started_at = std::time::Instant::now();
+        debug_log(&format!(
+            "mac notify start id={} in_flight={}",
+            message_id, in_flight
+        ));
+
         ensure_macos_notification_application();
         let title = if message.app.trim().is_empty() {
             format!("Priority {}", message.priority)
@@ -83,11 +104,12 @@ pub(crate) fn send_macos_notification(app: AppHandle, message: CachedMessage) {
             .title(&title)
             .subtitle(&subtitle)
             .message(&body)
-            .main_button(MainButton::SingleAction("Open"))
-            .close_button("Dismiss")
             .default_sound()
-            .wait_for_click(true)
-            .asynchronous(false);
+            // mac-notification-sys waits in an internal run-loop while waiting
+            // for interactions, which can leave background threads alive for a
+            // long time and cause high CPU. Use fire-and-forget delivery.
+            .wait_for_click(false)
+            .asynchronous(true);
 
         let sender_icon_path = resolve_default_notification_app_icon_path(&app);
         if let Some(sender_icon_path) = sender_icon_path.as_deref() {
@@ -101,17 +123,32 @@ pub(crate) fn send_macos_notification(app: AppHandle, message: CachedMessage) {
 
         match notification.send() {
             Ok(NotificationResponse::Click) | Ok(NotificationResponse::ActionButton(_)) => {
+                debug_log(&format!("mac notify click id={message_id}"));
                 ui_shell::show_main_window(&app);
                 let _ = app.emit("notification-clicked", message.clone());
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.emit("notification-clicked", message);
+                    let _ = window.emit("notification-clicked", message.clone());
                 }
             }
-            Ok(_) => {}
+            Ok(response) => {
+                debug_log(&format!(
+                    "mac notify delivered id={} response={response:?}",
+                    message_id
+                ));
+            }
             Err(error) => {
                 debug_log(&format!("failed to show macOS notification: {error}"));
             }
         }
+
+        let elapsed_ms = started_at.elapsed().as_millis();
+        let remaining = IN_FLIGHT_NOTIFICATION_TASKS
+            .fetch_sub(1, Ordering::SeqCst)
+            .saturating_sub(1);
+        debug_log(&format!(
+            "mac notify done id={} elapsed_ms={} in_flight={}",
+            message_id, elapsed_ms, remaining
+        ));
     });
 }
 

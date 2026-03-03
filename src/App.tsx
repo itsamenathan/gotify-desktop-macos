@@ -143,6 +143,7 @@ export function App() {
   const [isTesting, setIsTesting] = useState(false);
   const [testConnectionFlash, setTestConnectionFlash] = useState<"ok" | "error" | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
+  const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<RuntimeDiagnostics | null>(null);
   const [deletingMessageIds, setDeletingMessageIds] = useState<Record<string, boolean>>({});
   const [urlPreviews, setUrlPreviews] = useState<Record<string, UrlPreview | null>>({});
@@ -232,6 +233,9 @@ export function App() {
     if (snapshot.revision <= revisionsRef.current.connection) return false;
     revisionsRef.current.connection = snapshot.revision;
     setConnectionState(snapshot.data.state);
+    if (snapshot.data.state === "Connected") {
+      setStreamErrorMessage(null);
+    }
     return true;
   };
 
@@ -240,13 +244,16 @@ export function App() {
     revisionsRef.current.runtime = snapshot.revision;
     setDiagnostics(snapshot.data);
     setConnectionState(snapshot.data.connection_state);
+    if (snapshot.data.connection_state === "Connected") {
+      setStreamErrorMessage(null);
+    }
     return true;
   };
 
   const applyStreamErrorSnapshot = (snapshot: DomainSnapshot<StreamErrorData>) => {
     if (snapshot.revision <= revisionsRef.current.stream_error) return false;
     revisionsRef.current.stream_error = snapshot.revision;
-    setFeedback({ kind: "error", message: snapshot.data.message });
+    setStreamErrorMessage(snapshot.data.message);
     return true;
   };
 
@@ -976,6 +983,7 @@ export function App() {
         ) : null}
 
         {feedback ? <div className={feedback.kind === "ok" ? "feedback ok" : "feedback error"}>{feedback.message}</div> : null}
+        {!feedback && streamErrorMessage ? <div className="feedback error">{streamErrorMessage}</div> : null}
 
         <MessageFeed
           isQuickWindow={isQuickWindow}

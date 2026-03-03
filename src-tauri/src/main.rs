@@ -518,7 +518,7 @@ fn main() {
                     "quick",
                     WebviewUrl::App("index.html".into()),
                 )
-                .title("Gotify Inbox")
+                .title("Gotify Quick View")
                 .inner_size(470.0, 640.0)
                 .min_inner_size(360.0, 420.0)
                 .visible(false)
@@ -538,7 +538,8 @@ fn main() {
             ui_shell::sync_activation_policy(app.handle());
 
             let pause_items = pause::create_pause_menu_items(app.handle())?;
-            let open_item = MenuItem::with_id(app, "open_inbox", "Open Inbox", true, None::<&str>)?;
+            let open_item =
+                MenuItem::with_id(app, "open_main_window", "Show Main Window", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
@@ -574,7 +575,7 @@ fn main() {
                     }
                 })
                 .on_menu_event(move |app, event| match event.id().as_ref() {
-                    "open_inbox" => {
+                    "open_main_window" => {
                         ui_shell::show_main_window(app);
                     }
                     "pause_15m" => {

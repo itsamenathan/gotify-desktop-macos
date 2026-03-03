@@ -49,8 +49,12 @@ git checkout main
 git pull --ff-only
 npm run version:set -- "$VERSION"
 git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/Cargo.lock
-git commit -m "chore: bump version to $VERSION"
-git push origin main
+if git diff --cached --quiet; then
+  echo "Version files already at $VERSION; skipping version bump commit."
+else
+  git commit -m "chore: bump version to $VERSION"
+  git push origin main
+fi
 git tag "$TAG"
 git push origin "$TAG"
 

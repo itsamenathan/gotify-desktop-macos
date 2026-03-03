@@ -9,7 +9,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "version:set": "node scripts/set-version.mjs"
+    "version:set": "node scripts/set-version.mjs",
+    "release:tag": "bash scripts/release.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

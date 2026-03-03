@@ -117,14 +117,13 @@ GitHub Actions is configured to build release artifacts when you push a version 
 Typical release flow:
 
 ```bash
-git checkout main
-git pull
-npm run version:set -- 0.2.0
-git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
-git commit -m "chore: bump version to 0.2.0"
-git push origin main
-git tag v0.2.0
-git push origin v0.2.0
+npm run release:tag -- 0.2.0
+```
+
+Equivalent script path:
+
+```bash
+bash scripts/release.sh 0.2.0
 ```
 
 What happens on tag push:

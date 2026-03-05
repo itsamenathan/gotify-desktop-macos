@@ -390,6 +390,7 @@ p {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  position: relative;
 }
 
 .quick-feed-panel {
@@ -492,6 +493,34 @@ p {
   flex: 1;
   padding-right: 2px;
   scroll-behavior: smooth;
+}
+
+.scroll-top-fab {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  border: 1px solid color-mix(in srgb, var(--selected) 65%, var(--panel-border));
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: color-mix(in srgb, var(--selected) 92%, var(--panel-bg));
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--selected) 38%, transparent);
+  cursor: pointer;
+  z-index: 3;
+  transition: transform 140ms ease, box-shadow 160ms ease, opacity 140ms ease;
+}
+
+.scroll-top-fab:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 11px 21px color-mix(in srgb, var(--selected) 50%, transparent);
+}
+
+.scroll-top-fab:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--selected) 75%, #fff);
+  outline-offset: 2px;
 }
 
 .message-list-windowed {

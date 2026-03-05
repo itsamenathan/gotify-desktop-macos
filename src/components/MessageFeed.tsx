@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { MutableRefObject, RefObject } from "react";
 import type { AppGroup, PriorityThreshold, UiMessage, UrlPreview } from "../types";
 import { initials } from "../utils/selection";
@@ -47,6 +48,32 @@ export function MessageFeed({
   onDeleteMessage,
 }: MessageFeedProps) {
   const themeBadgeColor = getThemeBadgeColor();
+  const [showScrollTopButton, setShowScrollTopButton] = useState(false);
+
+  useEffect(() => {
+    const list = messageListRef.current;
+    if (!list) {
+      setShowScrollTopButton(false);
+      return;
+    }
+
+    setShowScrollTopButton(list.scrollTop > 180);
+  }, [messageListRef, filteredMessages.length, visibleMessages.length]);
+
+  const handleListScroll = (target: HTMLUListElement) => {
+    setShowScrollTopButton(target.scrollTop > 180);
+    if (!isWindowed) return;
+    setWindowRange(
+      computeWindowRange(filteredMessages.length, target.scrollTop, target.clientHeight, estimatedRowHeightRef.current)
+    );
+  };
+
+  const handleScrollToTop = () => {
+    const list = messageListRef.current;
+    if (!list) return;
+    list.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   return (
     <section className="content-grid">
       {!isQuickWindow ? (
@@ -106,21 +133,9 @@ export function MessageFeed({
           <ul
             ref={messageListRef}
             className={isWindowed ? "message-list message-list-windowed" : "message-list"}
-            onScroll={
-              isWindowed
-                ? (event) => {
-                    const target = event.currentTarget;
-                    setWindowRange(
-                      computeWindowRange(
-                        filteredMessages.length,
-                        target.scrollTop,
-                        target.clientHeight,
-                        estimatedRowHeightRef.current
-                      )
-                    );
-                  }
-                : undefined
-            }
+            onScroll={(event) => {
+              handleListScroll(event.currentTarget);
+            }}
           >
             {isWindowed && topSpacerPx > 0 ? (
               <li aria-hidden="true" className="message-spacer" style={{ height: `${topSpacerPx}px` }} />
@@ -225,6 +240,17 @@ export function MessageFeed({
             ) : null}
           </ul>
         )}
+        {showScrollTopButton ? (
+          <button
+            type="button"
+            className="scroll-top-fab"
+            aria-label="Scroll to top"
+            title="Back to top"
+            onClick={handleScrollToTop}
+          >
+            ↑ Top
+          </button>
+        ) : null}
       </section>
     </section>
   );

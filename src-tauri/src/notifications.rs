@@ -58,7 +58,11 @@ pub(crate) fn maybe_notify_message(app: &AppHandle, message: &CachedMessage) {
     let _ = app.emit_to("main", "notification-message", message);
     let _ = app.emit_to("quick", "notification-message", message);
     #[cfg(target_os = "macos")]
-    send_macos_notification(app.clone(), message.clone());
+    send_macos_notification(
+        app.clone(),
+        message.clone(),
+        settings.show_priority_in_notifications,
+    );
 }
 
 pub(crate) fn is_quiet_hours(start: Option<u8>, end: Option<u8>) -> bool {
@@ -80,7 +84,11 @@ pub(crate) fn is_quiet_hours(start: Option<u8>, end: Option<u8>) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn send_macos_notification(app: AppHandle, message: CachedMessage) {
+pub(crate) fn send_macos_notification(
+    app: AppHandle,
+    message: CachedMessage,
+    show_priority_in_notifications: bool,
+) {
     thread::spawn(move || {
         let message_id = message.id;
         let in_flight = IN_FLIGHT_NOTIFICATION_TASKS.fetch_add(1, Ordering::SeqCst) + 1;
@@ -91,10 +99,12 @@ pub(crate) fn send_macos_notification(app: AppHandle, message: CachedMessage) {
         ));
 
         ensure_macos_notification_application();
-        let title = if message.app.trim().is_empty() {
-            format!("Priority {}", message.priority)
-        } else {
-            format!("{} · Priority {}", message.app, message.priority)
+        let app_name = message.app.trim();
+        let title = match (app_name.is_empty(), show_priority_in_notifications) {
+            (true, true) => format!("Priority {}", message.priority),
+            (true, false) => "Gotify".to_string(),
+            (false, true) => format!("{} · Priority {}", app_name, message.priority),
+            (false, false) => app_name.to_string(),
         };
         let subtitle = if message.title.trim().is_empty() {
             "Gotify message".to_string()

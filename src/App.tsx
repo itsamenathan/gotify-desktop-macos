@@ -124,6 +124,7 @@ export function App() {
   const [activeCacheLimit, setActiveCacheLimit] = useState(100);
   const [launchAtLogin, setLaunchAtLogin] = useState(false);
   const [startMinimizedToTray, setStartMinimizedToTray] = useState(false);
+  const [showPriorityInNotifications, setShowPriorityInNotifications] = useState(true);
   const [quietStart, setQuietStart] = useState("");
   const [quietEnd, setQuietEnd] = useState("");
   const [hasStoredToken, setHasStoredToken] = useState(false);
@@ -191,6 +192,7 @@ export function App() {
     setActiveCacheLimit(normalizedCacheLimit);
     setLaunchAtLogin(settings.launch_at_login ?? false);
     setStartMinimizedToTray(settings.start_minimized_to_tray ?? false);
+    setShowPriorityInNotifications(settings.show_priority_in_notifications ?? true);
     setQuietStart(settings.quiet_hours_start == null ? "" : String(settings.quiet_hours_start));
     setQuietEnd(settings.quiet_hours_end == null ? "" : String(settings.quiet_hours_end));
     applyPauseState(settings.pause_until ?? null, settings.pause_mode ?? null);
@@ -651,6 +653,7 @@ export function App() {
         cacheLimit,
         launchAtLogin,
         startMinimizedToTray,
+        showPriorityInNotifications,
         quietHoursStart,
         quietHoursEnd,
       });
@@ -1099,6 +1102,7 @@ export function App() {
                 cacheLimit={cacheLimit}
                 launchAtLogin={launchAtLogin}
                 startMinimizedToTray={startMinimizedToTray}
+                showPriorityInNotifications={showPriorityInNotifications}
                 themePreference={themePreference}
                 isLoading={isLoading}
                 isSaving={isSaving}
@@ -1117,6 +1121,7 @@ export function App() {
                 setCacheLimit={setCacheLimit}
                 setLaunchAtLogin={setLaunchAtLogin}
                 setStartMinimizedToTray={setStartMinimizedToTray}
+                setShowPriorityInNotifications={setShowPriorityInNotifications}
                 setThemePreference={setThemePreference}
               />
             ) : null}

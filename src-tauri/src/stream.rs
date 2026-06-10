@@ -93,16 +93,11 @@ fn start_stream_internal(app: AppHandle, token_override: Option<String>) -> Resu
             let app_for_prefetch = app_for_task.clone();
             let base_url_for_prefetch = base_url.clone();
             let token_for_prefetch = token.clone();
+            if let Err(error) = messages::fetch_applications(&app_for_task, &base_url, &token).await
+            {
+                debug_log(&format!("failed to fetch applications: {error}"));
+            }
             tauri::async_runtime::spawn(async move {
-                if let Err(error) = messages::fetch_applications(
-                    &app_for_prefetch,
-                    &base_url_for_prefetch,
-                    &token_for_prefetch,
-                )
-                .await
-                {
-                    debug_log(&format!("failed to fetch applications: {error}"));
-                }
                 if let Err(error) = messages::fetch_recent_messages(
                     &app_for_prefetch,
                     &base_url_for_prefetch,
@@ -283,7 +278,16 @@ async fn stream_once(
                         pending_ping_since = None;
                         mark_stream_activity(app, event_now, "ws-text");
                         debug_log(&format!("ws text frame bytes={}", text.len()));
-                        if let Some(msg) = messages::parse_stream_message(app, text.as_ref()) {
+                        if let Some(wire_message) = messages::parse_stream_message_wire(text.as_ref()) {
+                            if !messages::has_app_meta(app, wire_message.appid) {
+                                if let Err(error) = messages::fetch_applications(app, base_url, token).await {
+                                    debug_log(&format!(
+                                        "failed to refresh applications for app_id={}: {error}",
+                                        wire_message.appid
+                                    ));
+                                }
+                            }
+                            let msg = messages::convert_wire_message(app, wire_message);
                             let _ = messages::cache_and_emit_message(app, msg, true);
                         } else {
                             debug_log(&format!("ws text parse miss: {}", truncate_message(text.as_ref(), 140)));

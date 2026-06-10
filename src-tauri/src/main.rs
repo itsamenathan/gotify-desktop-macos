@@ -62,6 +62,7 @@ fn save_settings(
     cache_limit: Option<usize>,
     launch_at_login: Option<bool>,
     start_minimized_to_tray: Option<bool>,
+    show_priority_in_notifications: Option<bool>,
     quiet_hours_start: Option<u8>,
     quiet_hours_end: Option<u8>,
 ) -> Result<contract::DomainSnapshot<SettingsResponse>, String> {
@@ -76,6 +77,7 @@ fn save_settings(
         cache_limit,
         launch_at_login,
         start_minimized_to_tray,
+        show_priority_in_notifications,
         quiet_hours_start,
         quiet_hours_end,
     )?;
@@ -538,8 +540,13 @@ fn main() {
             ui_shell::sync_activation_policy(app.handle());
 
             let pause_items = pause::create_pause_menu_items(app.handle())?;
-            let open_item =
-                MenuItem::with_id(app, "open_main_window", "Show Main Window", true, None::<&str>)?;
+            let open_item = MenuItem::with_id(
+                app,
+                "open_main_window",
+                "Show Main Window",
+                true,
+                None::<&str>,
+            )?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,

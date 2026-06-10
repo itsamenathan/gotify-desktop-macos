@@ -170,11 +170,11 @@ pub(crate) async fn fetch_applications(
     Ok(())
 }
 
-pub(crate) fn parse_stream_message(app: &AppHandle, text: &str) -> Option<CachedMessage> {
+pub(crate) fn parse_stream_message_wire(text: &str) -> Option<GotifyMessageWire> {
     match serde_json::from_str::<GotifyMessageWire>(text) {
         Ok(message) => {
             debug_log(&format!("message parsed id={}", message.id));
-            Some(convert_wire_message(app, message))
+            Some(message)
         }
         Err(error) => {
             debug_log(&format!(
@@ -185,6 +185,18 @@ pub(crate) fn parse_stream_message(app: &AppHandle, text: &str) -> Option<Cached
             None
         }
     }
+}
+
+pub(crate) fn has_app_meta(app: &AppHandle, app_id: i64) -> bool {
+    app.try_state::<AppState>()
+        .and_then(|state| {
+            state
+                .app_meta
+                .lock()
+                .ok()
+                .map(|map| map.contains_key(&app_id))
+        })
+        .unwrap_or(false)
 }
 
 pub(crate) fn convert_wire_message(app: &AppHandle, message: GotifyMessageWire) -> CachedMessage {

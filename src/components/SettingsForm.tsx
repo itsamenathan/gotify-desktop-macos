@@ -12,6 +12,7 @@ type SettingsFormProps = {
   cacheLimit: number;
   launchAtLogin: boolean;
   startMinimizedToTray: boolean;
+  showPriorityInNotifications: boolean;
   themePreference: ThemePreference;
   isLoading: boolean;
   isSaving: boolean;
@@ -30,6 +31,7 @@ type SettingsFormProps = {
   setCacheLimit: (value: number) => void;
   setLaunchAtLogin: (value: boolean) => void;
   setStartMinimizedToTray: (value: boolean) => void;
+  setShowPriorityInNotifications: (value: boolean) => void;
   setThemePreference: (value: ThemePreference) => void;
 };
 
@@ -45,6 +47,7 @@ export function SettingsForm(props: SettingsFormProps) {
     cacheLimit,
     launchAtLogin,
     startMinimizedToTray,
+    showPriorityInNotifications,
     themePreference,
     isLoading,
     isSaving,
@@ -63,6 +66,7 @@ export function SettingsForm(props: SettingsFormProps) {
     setCacheLimit,
     setLaunchAtLogin,
     setStartMinimizedToTray,
+    setShowPriorityInNotifications,
     setThemePreference,
   } = props;
   const disabled = isLoading || isSaving || isTesting;
@@ -135,6 +139,15 @@ export function SettingsForm(props: SettingsFormProps) {
               max={10}
               value={minPriority}
               onChange={(event) => setMinPriority(Number(event.target.value || 0))}
+              disabled={disabled}
+            />
+          </label>
+          <label className="settings-toggle">
+            <span className="settings-label">Show priority in notification title</span>
+            <input
+              type="checkbox"
+              checked={showPriorityInNotifications}
+              onChange={(event) => setShowPriorityInNotifications(event.target.checked)}
               disabled={disabled}
             />
           </label>

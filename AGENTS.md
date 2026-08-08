@@ -80,5 +80,6 @@ Follow `docs/frontend-backend-standard.md` exactly.
 ## CI and Release Notes
 
 - CI file: `.github/workflows/ci.yml`
-- Verify job includes `npm run standard:check`, frontend build, and Rust check.
-- Release builds are tag-driven (`v*`) and use Tauri build on macOS.
+- Verify job includes `npm run standard:check`, frontend build, and Rust check for both `aarch64-apple-darwin` and `x86_64-apple-darwin`.
+- Release builds are tag-driven (`v*`) and use Tauri build on macOS, once per architecture (Apple silicon and Intel).
+- Keep both architectures supported: do not add host-only or arch-specific backend code without a `cfg` guard.

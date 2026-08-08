@@ -86,6 +86,26 @@ Common bundle locations:
 - `.app`: `src-tauri/target/release/bundle/macos/`
 - `.dmg`: `src-tauri/target/release/bundle/dmg/`
 
+### Build for a specific architecture
+
+The plain build above targets the machine you are building on. To build for a specific Mac architecture (both are supported and released), install the Rust target once and pass it to the build:
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+# Apple silicon
+npm run tauri build -- --target aarch64-apple-darwin
+
+# Intel
+npm run tauri build -- --target x86_64-apple-darwin
+```
+
+Cross-compiling between the two works on either kind of Mac.
+
+When `--target` is passed, bundles move under the target triple:
+- `.app`: `src-tauri/target/<target-triple>/release/bundle/macos/`
+- `.dmg`: `src-tauri/target/<target-triple>/release/bundle/dmg/`
+
 ## Run the production build locally
 
 After building, either:
@@ -127,8 +147,10 @@ bash scripts/release.sh 0.2.0
 ```
 
 What happens on tag push:
-- CI runs verification checks.
-- A release build runs (`npm run tauri build`) on macOS.
+- CI runs verification checks, including a Rust check for both `aarch64-apple-darwin` and `x86_64-apple-darwin`.
+- Release builds run on macOS once per architecture (`npm run tauri build -- --target <triple>`).
 - Release CI also syncs app version from the tag (`vX.Y.Z` -> `X.Y.Z`) before building, to keep bundle names/version metadata aligned with the tag.
-- Artifacts are uploaded to the workflow run (`.dmg` and zipped `.app`).
-- A GitHub Release is created or updated automatically with generated release notes and attached assets.
+- Artifacts are uploaded to the workflow run (`.dmg` and zipped `.app`) with an architecture suffix:
+  - `gotify-desktop-<tag>-macos-apple-silicon.dmg` / `-app.zip`
+  - `gotify-desktop-<tag>-macos-intel.dmg` / `-app.zip`
+- A GitHub Release is created or updated automatically with generated release notes and all architecture assets attached.

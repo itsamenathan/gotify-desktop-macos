@@ -20,6 +20,15 @@ Gotify Desktop is a native macOS client for [Gotify](https://gotify.net/), built
 
 Download the latest release from GitHub and move `Gotify Desktop.app` to `/Applications`.
 
+Releases are built for both Mac architectures, so pick the asset that matches your Mac:
+
+| Mac | Asset |
+| --- | --- |
+| Apple silicon (M1 and newer) | `gotify-desktop-<version>-macos-apple-silicon.dmg` (or `-app.zip`) |
+| Intel | `gotify-desktop-<version>-macos-intel.dmg` (or `-app.zip`) |
+
+Not sure which you have? Check `Apple menu -> About This Mac`: an Apple silicon Mac lists a chip such as `Apple M1`, an Intel Mac lists an Intel processor.
+
 ## Opening downloaded builds on macOS (Gatekeeper)
 
 If macOS says `"Gotify Desktop.app" is damaged and can't be opened`, Gatekeeper is blocking an unsigned or unnotarized app.

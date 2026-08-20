@@ -238,6 +238,7 @@ export function MessageFeed({
             {isWindowed && bottomSpacerPx > 0 ? (
               <li aria-hidden="true" className="message-spacer" style={{ height: `${bottomSpacerPx}px` }} />
             ) : null}
+            {showScrollTopButton ? <li aria-hidden="true" className="message-spacer scroll-top-fab-spacer" /> : null}
           </ul>
         )}
         {showScrollTopButton ? (

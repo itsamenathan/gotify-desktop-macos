@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Fixed the floating "↑ Top" button covering the delete button of the last message when scrolled to the bottom of the feed.
+- Release builds are now universal binaries, so downloads run natively on Intel Macs as well as Apple Silicon.
 
 ## 0.2.6
 

@@ -55,11 +55,15 @@ jobs:
 
   release-build:
     name: Build release bundles
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     needs: verify
     permissions:
       contents: write
+
+    env:
+      # Universal binary so the app runs on both Apple Silicon and Intel Macs.
+      BUILD_TARGET: universal-apple-darwin
 
     steps:
       - name: Checkout
@@ -73,6 +77,8 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -83,42 +89,68 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Tags are used verbatim; branch names (workflow_dispatch) may contain
+      # slashes, which are rejected in artifact names.
+      - name: Compute artifact slug
+        id: meta
+        run: echo "slug=${GITHUB_REF_NAME//\//-}" >> "$GITHUB_OUTPUT"
+
       - name: Sync app version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
         run: npm run version:set -- "${GITHUB_REF_NAME#v}"
 
       - name: Build Tauri app
-        run: npm run tauri build
+        run: npm run tauri build -- --target "$BUILD_TARGET"
 
-      - name: Package app bundle as zip
+      - name: Verify bundle architectures
         run: |
           shopt -s nullglob
-          apps=(src-tauri/target/release/bundle/macos/*.app)
+          apps=(src-tauri/target/$BUILD_TARGET/release/bundle/macos/*.app)
           if [ ${#apps[@]} -eq 0 ]; then
             echo "No .app bundle found"
             exit 1
           fi
+          bins=("${apps[0]}"/Contents/MacOS/*)
+          if [ ${#bins[@]} -eq 0 ]; then
+            echo "No executable found in ${apps[0]}/Contents/MacOS"
+            exit 1
+          fi
+          BIN_PATH="${bins[0]}"
+          lipo -info "$BIN_PATH"
+          for arch in arm64 x86_64; do
+            if ! lipo -archs "$BIN_PATH" | tr ' ' '\n' | grep -qx "$arch"; then
+              echo "Bundle is missing the $arch slice"
+              exit 1
+            fi
+          done
+
+      - name: Package app bundle as zip
+        run: |
+          shopt -s nullglob
+          apps=(src-tauri/target/$BUILD_TARGET/release/bundle/macos/*.app)
           APP_PATH="${apps[0]}"
-          ZIP_PATH="src-tauri/target/release/bundle/macos/gotify-desktop-${{ github.ref_name }}-macos-app.zip"
+          ZIP_PATH="src-tauri/target/$BUILD_TARGET/release/bundle/macos/gotify-desktop-${{ steps.meta.outputs.slug }}-macos-universal-app.zip"
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
 
       - name: Upload macOS app bundle
         uses: actions/upload-artifact@v4
         with:
-          name: gotify-desktop-${{ github.ref_name }}-macos-app
-          path: src-tauri/target/release/bundle/macos/gotify-desktop-${{ github.ref_name }}-macos-app.zip
+          name: gotify-desktop-${{ steps.meta.outputs.slug }}-macos-universal-app
+          path: src-tauri/target/universal-apple-darwin/release/bundle/macos/gotify-desktop-${{ steps.meta.outputs.slug }}-macos-universal-app.zip
           if-no-files-found: error
 
       - name: Upload DMG bundle
         uses: actions/upload-artifact@v4
         with:
-          name: gotify-desktop-${{ github.ref_name }}-macos-dmg
-          path: src-tauri/target/release/bundle/dmg/*.dmg
+          name: gotify-desktop-${{ steps.meta.outputs.slug }}-macos-universal-dmg
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
       - name: Create GitHub release and upload assets
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            src-tauri/target/release/bundle/macos/gotify-desktop-${{ github.ref_name }}-macos-app.zip
-            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/gotify-desktop-${{ steps.meta.outputs.slug }}-macos-universal-app.zip
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg

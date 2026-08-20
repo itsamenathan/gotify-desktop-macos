@@ -495,6 +495,11 @@ p {
   scroll-behavior: smooth;
 }
 
+.scroll-top-fab-spacer {
+  flex: 0 0 auto;
+  height: 52px;
+}
+
 .scroll-top-fab {
   position: absolute;
   right: 24px;

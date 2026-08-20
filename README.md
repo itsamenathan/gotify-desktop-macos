@@ -20,6 +20,8 @@ Gotify Desktop is a native macOS client for [Gotify](https://gotify.net/), built
 
 Download the latest release from GitHub and move `Gotify Desktop.app` to `/Applications`.
 
+Release builds are universal binaries, so the same download runs natively on both Apple Silicon and Intel Macs.
+
 ## Opening downloaded builds on macOS (Gatekeeper)
 
 If macOS says `"Gotify Desktop.app" is damaged and can't be opened`, Gatekeeper is blocking an unsigned or unnotarized app.

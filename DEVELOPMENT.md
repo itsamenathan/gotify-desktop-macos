@@ -86,6 +86,25 @@ Common bundle locations:
 - `.app`: `src-tauri/target/release/bundle/macos/`
 - `.dmg`: `src-tauri/target/release/bundle/dmg/`
 
+This produces a build for your own machine's architecture only.
+
+### Universal (Apple Silicon + Intel) build
+
+Release CI ships a universal binary so one download works on both Apple Silicon and Intel Macs. To reproduce that locally you need both Rust targets (requires a `rustup`-managed toolchain):
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+npm run tauri build -- --target universal-apple-darwin
+```
+
+Bundles then land under `src-tauri/target/universal-apple-darwin/release/bundle/`.
+
+Confirm both architecture slices are present:
+
+```bash
+lipo -info "src-tauri/target/universal-apple-darwin/release/bundle/macos/Gotify Desktop.app/Contents/MacOS/gotify-desktop"
+```
+
 ## Run the production build locally
 
 After building, either:
@@ -128,7 +147,8 @@ bash scripts/release.sh 0.2.0
 
 What happens on tag push:
 - CI runs verification checks.
-- A release build runs (`npm run tauri build`) on macOS.
+- A release build runs on macOS (`npm run tauri build -- --target universal-apple-darwin`), producing a universal Apple Silicon + Intel bundle.
+- CI fails the build if either architecture slice is missing from the `.app`.
 - Release CI also syncs app version from the tag (`vX.Y.Z` -> `X.Y.Z`) before building, to keep bundle names/version metadata aligned with the tag.
 - Artifacts are uploaded to the workflow run (`.dmg` and zipped `.app`).
 - A GitHub Release is created or updated automatically with generated release notes and attached assets.

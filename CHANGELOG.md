@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Clicking a macOS notification now opens the main window and selects the message it came from. Can be turned off with the new "Open main window when a notification is clicked" setting.
+
 ## 0.2.7
 
 - Fixed the floating "↑ Top" button covering the delete button of the last message when scrolled to the bottom of the feed.

@@ -13,6 +13,7 @@ type SettingsFormProps = {
   launchAtLogin: boolean;
   startMinimizedToTray: boolean;
   showPriorityInNotifications: boolean;
+  openMainWindowOnNotificationClick: boolean;
   themePreference: ThemePreference;
   isLoading: boolean;
   isSaving: boolean;
@@ -32,6 +33,7 @@ type SettingsFormProps = {
   setLaunchAtLogin: (value: boolean) => void;
   setStartMinimizedToTray: (value: boolean) => void;
   setShowPriorityInNotifications: (value: boolean) => void;
+  setOpenMainWindowOnNotificationClick: (value: boolean) => void;
   setThemePreference: (value: ThemePreference) => void;
 };
 
@@ -48,6 +50,7 @@ export function SettingsForm(props: SettingsFormProps) {
     launchAtLogin,
     startMinimizedToTray,
     showPriorityInNotifications,
+    openMainWindowOnNotificationClick,
     themePreference,
     isLoading,
     isSaving,
@@ -67,6 +70,7 @@ export function SettingsForm(props: SettingsFormProps) {
     setLaunchAtLogin,
     setStartMinimizedToTray,
     setShowPriorityInNotifications,
+    setOpenMainWindowOnNotificationClick,
     setThemePreference,
   } = props;
   const disabled = isLoading || isSaving || isTesting;
@@ -148,6 +152,15 @@ export function SettingsForm(props: SettingsFormProps) {
               type="checkbox"
               checked={showPriorityInNotifications}
               onChange={(event) => setShowPriorityInNotifications(event.target.checked)}
+              disabled={disabled}
+            />
+          </label>
+          <label className="settings-toggle">
+            <span className="settings-label">Open main window when a notification is clicked</span>
+            <input
+              type="checkbox"
+              checked={openMainWindowOnNotificationClick}
+              onChange={(event) => setOpenMainWindowOnNotificationClick(event.target.checked)}
               disabled={disabled}
             />
           </label>

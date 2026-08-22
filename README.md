@@ -6,7 +6,7 @@ Gotify Desktop is a native macOS client for [Gotify](https://gotify.net/), built
 
 - Real-time stream of Gotify messages over websocket
 - App-filtered message list with unread-style grouping
-- Native macOS desktop notifications
+- Native macOS desktop notifications, with click-to-open of the originating message
 - Quick controls for notification pause/resume
 - Local desktop experience for self-hosted Gotify instances
 

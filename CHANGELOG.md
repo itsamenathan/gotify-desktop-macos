@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.8
 
 - Clicking a macOS notification now opens the main window and selects the message it came from. Can be turned off with the new "Open main window when a notification is clicked" setting.
 

@@ -18,6 +18,8 @@ use diagnostics::RuntimeDiagnostics;
 mod core;
 mod messages;
 mod model;
+#[cfg(target_os = "macos")]
+mod notification_click;
 mod notifications;
 mod pause;
 mod preview;
@@ -63,6 +65,7 @@ fn save_settings(
     launch_at_login: Option<bool>,
     start_minimized_to_tray: Option<bool>,
     show_priority_in_notifications: Option<bool>,
+    open_main_window_on_notification_click: Option<bool>,
     quiet_hours_start: Option<u8>,
     quiet_hours_end: Option<u8>,
 ) -> Result<contract::DomainSnapshot<SettingsResponse>, String> {
@@ -78,6 +81,7 @@ fn save_settings(
         launch_at_login,
         start_minimized_to_tray,
         show_priority_in_notifications,
+        open_main_window_on_notification_click,
         quiet_hours_start,
         quiet_hours_end,
     )?;

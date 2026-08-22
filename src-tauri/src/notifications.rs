@@ -9,13 +9,12 @@ use std::{
 
 use chrono::Timelike;
 #[cfg(target_os = "macos")]
-use mac_notification_sys::{Notification, NotificationResponse};
+use mac_notification_sys::Notification;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{
-    debug_log, decode_data_url_bytes, settings::read_settings, truncate_message, ui_shell,
-    unix_now_secs, AppState, ApplicationMeta, CachedMessage, APP_ICON_MAX_BYTES,
-    PAUSE_FOREVER_SENTINEL,
+    debug_log, decode_data_url_bytes, settings::read_settings, truncate_message, unix_now_secs,
+    AppState, ApplicationMeta, CachedMessage, APP_ICON_MAX_BYTES, PAUSE_FOREVER_SENTINEL,
 };
 
 #[cfg(target_os = "macos")]
@@ -119,9 +118,10 @@ pub(crate) fn send_macos_notification(
             .subtitle(&subtitle)
             .message(&body)
             .default_sound()
-            // mac-notification-sys waits in an internal run-loop while waiting
-            // for interactions, which can leave background threads alive for a
-            // long time and cause high CPU. Use fire-and-forget delivery.
+            // mac-notification-sys waits in an internal polling run-loop while
+            // waiting for interactions, which can leave background threads alive
+            // for a long time and cause high CPU. Use fire-and-forget delivery and
+            // let `notification_click` handle clicks via a persistent delegate.
             .wait_for_click(false)
             .asynchronous(true);
 
@@ -135,14 +135,13 @@ pub(crate) fn send_macos_notification(
             notification.content_image(content_image_path);
         }
 
+        crate::notification_click::remember_delivered(&title, &subtitle, &body, &message);
+
         match notification.send() {
-            Ok(NotificationResponse::Click) | Ok(NotificationResponse::ActionButton(_)) => {
-                debug_log(&format!("mac notify click id={message_id}"));
-                ui_shell::show_main_window(&app);
-                let _ = app.emit_to("main", "notification-clicked", message.clone());
-                let _ = app.emit_to("quick", "notification-clicked", message.clone());
-            }
             Ok(response) => {
+                // Clicks arrive later through our notification center delegate,
+                // which mac-notification-sys replaces on every send.
+                crate::notification_click::reassert_delegate(&app);
                 debug_log(&format!(
                     "mac notify delivered id={} response={response:?}",
                     message_id

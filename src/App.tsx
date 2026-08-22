@@ -125,6 +125,7 @@ export function App() {
   const [launchAtLogin, setLaunchAtLogin] = useState(false);
   const [startMinimizedToTray, setStartMinimizedToTray] = useState(false);
   const [showPriorityInNotifications, setShowPriorityInNotifications] = useState(true);
+  const [openMainWindowOnNotificationClick, setOpenMainWindowOnNotificationClick] = useState(true);
   const [quietStart, setQuietStart] = useState("");
   const [quietEnd, setQuietEnd] = useState("");
   const [hasStoredToken, setHasStoredToken] = useState(false);
@@ -193,6 +194,7 @@ export function App() {
     setLaunchAtLogin(settings.launch_at_login ?? false);
     setStartMinimizedToTray(settings.start_minimized_to_tray ?? false);
     setShowPriorityInNotifications(settings.show_priority_in_notifications ?? true);
+    setOpenMainWindowOnNotificationClick(settings.open_main_window_on_notification_click ?? true);
     setQuietStart(settings.quiet_hours_start == null ? "" : String(settings.quiet_hours_start));
     setQuietEnd(settings.quiet_hours_end == null ? "" : String(settings.quiet_hours_end));
     applyPauseState(settings.pause_until ?? null, settings.pause_mode ?? null);
@@ -654,6 +656,7 @@ export function App() {
         launchAtLogin,
         startMinimizedToTray,
         showPriorityInNotifications,
+        openMainWindowOnNotificationClick,
         quietHoursStart,
         quietHoursEnd,
       });
@@ -1103,6 +1106,7 @@ export function App() {
                 launchAtLogin={launchAtLogin}
                 startMinimizedToTray={startMinimizedToTray}
                 showPriorityInNotifications={showPriorityInNotifications}
+                openMainWindowOnNotificationClick={openMainWindowOnNotificationClick}
                 themePreference={themePreference}
                 isLoading={isLoading}
                 isSaving={isSaving}
@@ -1122,6 +1126,7 @@ export function App() {
                 setLaunchAtLogin={setLaunchAtLogin}
                 setStartMinimizedToTray={setStartMinimizedToTray}
                 setShowPriorityInNotifications={setShowPriorityInNotifications}
+                setOpenMainWindowOnNotificationClick={setOpenMainWindowOnNotificationClick}
                 setThemePreference={setThemePreference}
               />
             ) : null}

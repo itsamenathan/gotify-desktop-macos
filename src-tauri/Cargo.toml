@@ -23,6 +23,12 @@ tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 mac-notification-sys = "0.6.9"
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSString",
+    "NSUserNotification",
+] }
 
 [features]
 default = ["custom-protocol"]

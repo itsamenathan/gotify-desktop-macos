@@ -116,10 +116,16 @@ pub(crate) struct StoredSettings {
     pub(crate) launch_at_login: bool,
     pub(crate) start_minimized_to_tray: bool,
     pub(crate) show_priority_in_notifications: bool,
+    #[serde(default = "default_open_main_window_on_notification_click")]
+    pub(crate) open_main_window_on_notification_click: bool,
     pub(crate) pause_until: Option<u64>,
     pub(crate) pause_mode: Option<String>,
     pub(crate) quiet_hours_start: Option<u8>,
     pub(crate) quiet_hours_end: Option<u8>,
+}
+
+fn default_open_main_window_on_notification_click() -> bool {
+    true
 }
 
 impl Default for StoredSettings {
@@ -135,6 +141,8 @@ impl Default for StoredSettings {
             launch_at_login: false,
             start_minimized_to_tray: false,
             show_priority_in_notifications: true,
+            open_main_window_on_notification_click: default_open_main_window_on_notification_click(
+            ),
             pause_until: None,
             pause_mode: None,
             quiet_hours_start: None,
@@ -155,6 +163,7 @@ pub(crate) struct SettingsResponse {
     pub(crate) launch_at_login: bool,
     pub(crate) start_minimized_to_tray: bool,
     pub(crate) show_priority_in_notifications: bool,
+    pub(crate) open_main_window_on_notification_click: bool,
     pub(crate) pause_until: Option<u64>,
     pub(crate) pause_mode: Option<String>,
     pub(crate) quiet_hours_start: Option<u8>,
@@ -183,6 +192,7 @@ fn to_settings_response(stored: StoredSettings) -> SettingsResponse {
         launch_at_login: stored.launch_at_login,
         start_minimized_to_tray: stored.start_minimized_to_tray,
         show_priority_in_notifications: stored.show_priority_in_notifications,
+        open_main_window_on_notification_click: stored.open_main_window_on_notification_click,
         pause_until: stored.pause_until,
         pause_mode: stored.pause_mode,
         quiet_hours_start: stored.quiet_hours_start,
@@ -207,6 +217,7 @@ pub(crate) fn save_settings<R: Runtime>(
     launch_at_login: Option<bool>,
     start_minimized_to_tray: Option<bool>,
     show_priority_in_notifications: Option<bool>,
+    open_main_window_on_notification_click: Option<bool>,
     quiet_hours_start: Option<u8>,
     quiet_hours_end: Option<u8>,
 ) -> Result<SettingsResponse, String> {
@@ -264,6 +275,8 @@ pub(crate) fn save_settings<R: Runtime>(
         start_minimized_to_tray: start_minimized_to_tray.unwrap_or(current.start_minimized_to_tray),
         show_priority_in_notifications: show_priority_in_notifications
             .unwrap_or(current.show_priority_in_notifications),
+        open_main_window_on_notification_click: open_main_window_on_notification_click
+            .unwrap_or(current.open_main_window_on_notification_click),
         pause_until: current.pause_until,
         pause_mode: current.pause_mode,
         quiet_hours_start: quiet_start.map(|h| h % 24),

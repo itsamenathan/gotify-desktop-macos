@@ -17,6 +17,7 @@ export type SettingsResponse = {
   launch_at_login: boolean;
   start_minimized_to_tray: boolean;
   show_priority_in_notifications: boolean;
+  open_main_window_on_notification_click: boolean;
   pause_until: number | null;
   pause_mode: string | null;
   quiet_hours_start: number | null;

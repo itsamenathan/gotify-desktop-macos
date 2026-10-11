@@ -4,6 +4,7 @@
 
 - Fixed "No route to host" connection failures to Gotify servers on the local network. The app now declares local network access, so macOS can ask for permission instead of blocking it.
 - Fixed the "App Background Activity" notice appearing on every launch when "Launch at login" is enabled.
+- Fixed macOS notifications showing an outdated application icon after the icon was changed on the Gotify server.
 
 ## 0.2.8
 

@@ -268,33 +268,44 @@ pub(crate) fn cache_remote_notification_icon_png(
     app_id: i64,
     icon_url: &str,
 ) -> Option<String> {
+    if !icon_url.trim_start().starts_with("data:") {
+        return None;
+    }
     let icons_dir = notification_icon_cache_dir(app)?;
     let file_path = icons_dir.join(format!("app-{app_id}.png"));
-    if file_path.exists() {
+    if write_notification_icon_if_changed(&file_path, app_id, icon_url) {
         return Some(file_path.to_string_lossy().to_string());
     }
-
-    if icon_url.trim_start().starts_with("data:") {
-        let bytes = match decode_data_url_bytes(icon_url, APP_ICON_MAX_BYTES) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                debug_log(&format!(
-                    "failed decoding data-url app icon for app_id={app_id}: {error}"
-                ));
-                return None;
-            }
-        };
-        if bytes.is_empty() {
-            return None;
-        }
-        if let Err(error) = fs::write(&file_path, &bytes) {
-            debug_log(&format!("failed writing app icon cache file: {error}"));
-            return None;
-        }
-        return Some(file_path.to_string_lossy().to_string());
-    }
-
     None
+}
+
+/// Decodes `icon_url` and writes it to `file_path` unless the cached file
+/// already holds the same bytes, so icons changed on the server replace stale
+/// cache entries. Returns whether `file_path` holds the current icon.
+#[cfg(target_os = "macos")]
+fn write_notification_icon_if_changed(file_path: &Path, app_id: i64, icon_url: &str) -> bool {
+    let bytes = match decode_data_url_bytes(icon_url, APP_ICON_MAX_BYTES) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            debug_log(&format!(
+                "failed decoding data-url app icon for app_id={app_id}: {error}"
+            ));
+            return false;
+        }
+    };
+    if bytes.is_empty() {
+        return false;
+    }
+    if fs::read(file_path).is_ok_and(|existing| existing == bytes) {
+        return true;
+    }
+    if let Err(error) = fs::write(file_path, &bytes) {
+        debug_log(&format!(
+            "failed writing app icon cache file for app_id={app_id}: {error}"
+        ));
+        return false;
+    }
+    true
 }
 
 #[cfg(target_os = "macos")]
@@ -371,34 +382,14 @@ pub(crate) fn warm_notification_icon_cache(
     app: &AppHandle,
     app_meta: &HashMap<i64, ApplicationMeta>,
 ) {
+    let Some(icons_dir) = notification_icon_cache_dir(app) else {
+        return;
+    };
     for (app_id, meta) in app_meta {
-        if meta.icon_url.trim().is_empty() {
-            continue;
-        }
         if !meta.icon_url.trim_start().starts_with("data:") {
             continue;
         }
-        let Some(icons_dir) = notification_icon_cache_dir(app) else {
-            continue;
-        };
         let file_path = icons_dir.join(format!("app-{app_id}.png"));
-        if file_path.exists() {
-            continue;
-        }
-        match decode_data_url_bytes(&meta.icon_url, APP_ICON_MAX_BYTES) {
-            Ok(bytes) if !bytes.is_empty() => {
-                if let Err(error) = fs::write(&file_path, &bytes) {
-                    debug_log(&format!(
-                        "warm_notification_icon_cache: failed writing icon app_id={app_id}: {error}"
-                    ));
-                }
-            }
-            Ok(_) => {}
-            Err(error) => {
-                debug_log(&format!(
-                    "warm_notification_icon_cache: failed decoding icon app_id={app_id}: {error}"
-                ));
-            }
-        }
+        write_notification_icon_if_changed(&file_path, *app_id, &meta.icon_url);
     }
 }

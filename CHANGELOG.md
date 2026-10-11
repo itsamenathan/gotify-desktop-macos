@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.9
+
+- Fixed "No route to host" connection failures to Gotify servers on the local network. The app now declares local network access, so macOS can ask for permission instead of blocking it.
+- Fixed the "App Background Activity" notice appearing on every launch when "Launch at login" is enabled.
+
 ## 0.2.8
 
 - Clicking a macOS notification now opens the main window and selects the message it came from. Can be turned off with the new "Open main window when a notification is clicked" setting.

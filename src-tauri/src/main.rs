@@ -429,6 +429,12 @@ fn apply_launch_at_login(enabled: bool) -> Result<(), String> {
         xml_escape(&exe_str)
     );
 
+    // Rewriting the agent makes macOS re-register it and show the
+    // "App Background Activity" notice, so skip when nothing changed.
+    if fs::read_to_string(&plist_path).is_ok_and(|existing| existing == plist) {
+        return Ok(());
+    }
+
     fs::write(&plist_path, plist)
         .map_err(|error| format!("Failed to write launch agent: {error}"))?;
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.10
+
+- Fixed "No route to host" connection failures to Gotify servers on the local network that persisted in 0.2.9. The app bundle is now ad-hoc signed with its bundle identifier, so macOS applies the Local Network permission to the app instead of silently blocking it.
+
 ## 0.2.9
 
 - Fixed "No route to host" connection failures to Gotify servers on the local network. The app now declares local network access, so macOS can ask for permission instead of blocking it.

@@ -16,6 +16,7 @@ if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
 const repoRoot = process.cwd();
 
 const packageJsonPath = path.join(repoRoot, "package.json");
+const packageLockPath = path.join(repoRoot, "package-lock.json");
 const tauriConfPath = path.join(repoRoot, "src-tauri", "tauri.conf.json");
 const cargoTomlPath = path.join(repoRoot, "src-tauri", "Cargo.toml");
 const cargoLockPath = path.join(repoRoot, "src-tauri", "Cargo.lock");
@@ -23,6 +24,13 @@ const cargoLockPath = path.join(repoRoot, "src-tauri", "Cargo.lock");
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
 packageJson.version = version;
 fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+
+const packageLock = JSON.parse(fs.readFileSync(packageLockPath, "utf8"));
+packageLock.version = version;
+if (packageLock.packages?.[""]) {
+  packageLock.packages[""].version = version;
+}
+fs.writeFileSync(packageLockPath, `${JSON.stringify(packageLock, null, 2)}\n`);
 
 const tauriConf = JSON.parse(fs.readFileSync(tauriConfPath, "utf8"));
 tauriConf.version = version;
@@ -72,5 +80,5 @@ const nextCargoLock = cargoLock.replace(lockPackagePattern, `$1${version}$3`);
 fs.writeFileSync(cargoLockPath, nextCargoLock);
 
 console.log(
-  `Set version to ${version} in package.json, src-tauri/tauri.conf.json, src-tauri/Cargo.toml, and src-tauri/Cargo.lock`
+  `Set version to ${version} in package.json, package-lock.json, src-tauri/tauri.conf.json, src-tauri/Cargo.toml, and src-tauri/Cargo.lock`
 );

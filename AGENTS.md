@@ -82,3 +82,22 @@ Follow `docs/frontend-backend-standard.md` exactly.
 - CI file: `.github/workflows/ci.yml`
 - Verify job includes `npm run standard:check`, frontend build, and Rust check.
 - Release builds are tag-driven (`v*`) and use Tauri build on macOS.
+
+## Version Changes
+
+Always bump the version with `npm run version:set -- <version>` (e.g. `0.2.10`). Do not edit version numbers by hand. The script updates every file that carries the app version:
+
+- `package.json`
+- `package-lock.json` (top-level `version` and `packages[""].version`)
+- `src-tauri/tauri.conf.json` (the version shown in the built app)
+- `src-tauri/Cargo.toml`
+- `src-tauri/Cargo.lock` (the `gotify-desktop` package entry)
+
+If a new file starts carrying the version, add it to `scripts/set-version.mjs` and this list.
+
+Release steps:
+
+1. Add user-facing changes to `CHANGELOG.md` under `## Unreleased` as they land.
+2. Rename `## Unreleased` to `## <version>` (commit: `chore: mark changelog <version>`).
+3. Run `npm run version:set -- <version>` and commit all changed files (commit: `chore: bump version to <version>`).
+4. Run the required validation above, then tag `v<version>` on `main`. CI re-runs `version:set` from the tag, so the tag must match the committed version.
